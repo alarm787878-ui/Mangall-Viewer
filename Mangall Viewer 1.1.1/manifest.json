@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Mangall Viewer",
+  "version": "1.1.1",
+  "description": "DCInside 글 이미지를 페이지형 만화 뷰어로 표시합니다.",
+  "permissions": [
+    "contextMenus",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.dcinside.com/*",
+    "*://*.dcinside.co.kr/*",
+    "*://image.dcinside.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Mangall Viewer",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "logo_16.png",
+      "32": "logo_32.png",
+      "48": "logo_48.png",
+      "128": "logo_128.png"
+    }
+  },
+  "icons": {
+    "16": "logo_16.png",
+    "32": "logo_32.png",
+    "48": "logo_48.png",
+    "128": "logo_128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.dcinside.com/*",
+        "*://*.dcinside.co.kr/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "style.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

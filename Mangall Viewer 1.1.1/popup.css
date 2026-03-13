@@ -1,0 +1,32 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-width: 160px;
+  background: #ffffff;
+  font-family: Arial, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+
+.popup_root {
+  padding: 12px;
+}
+
+.popup_btn {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #2f6fed;
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.popup_btn:hover {
+  filter: brightness(0.96);
+}
+
+.popup_btn:active {
+  filter: brightness(0.92);
+}
