@@ -21,6 +21,11 @@ body {
   font-size: 14px;
   line-height: 1.2;
   cursor: pointer;
+  text-align: center;
+}
+
+.popup_btn + .popup_btn {
+  margin-top: 10px;
 }
 
 .popup_btn:hover {
