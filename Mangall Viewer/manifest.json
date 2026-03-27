@@ -1,8 +1,8 @@
-﻿{
+{
   "manifest_version": 3,
   "name": "만갤 뷰어 - dcinside Image Viewer",
-  "version": "1.2.2",
-  "description": "dcinside 게시글에 첨부된 이미지를 페이지형 뷰어로 표시합니다.",
+  "version": "1.3.1",
+  "description": "디시인사이드에서 이미지를 양면 전체화면으로 편하게 볼 수 있는 뷰어입니다.",
   "permissions": [
     "contextMenus",
     "activeTab",
@@ -16,17 +16,16 @@
     "default_title": "만갤 뷰어",
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "logo_16.png",
-      "32": "logo_32.png",
-      "48": "logo_48.png",
-      "128": "logo_128.png"
+      "16": "icons/icon_16.png",
+      "32": "icons/icon_32.png",
+      "48": "icons/icon_48.png",
+      "128": "icons/icon_128.png"
     }
   },
   "icons": {
-    "16": "logo_16.png",
-    "32": "logo_32.png",
-    "48": "logo_48.png",
-    "128": "logo_128.png"
+    "16": "icons/icon_16.png",
+    "32": "icons/icon_32.png",
+    "48": "icons/icon_48.png",
+    "128": "icons/icon_128.png"
   }
 }
-

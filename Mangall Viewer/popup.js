@@ -1,8 +1,8 @@
 const openButton = document.getElementById("open_btn");
-const DCINSIDE_URL_PATTERN = /^https?:\/\/([^.]+\.)?dcinside\.(com|co\.kr)\//i;
+const POPUP_BUTTON_LABEL = "만갤 뷰어";
 
-function isDcinsideUrl(url) {
-  return typeof url === "string" && DCINSIDE_URL_PATTERN.test(url);
+function getCurrentAdapter(url) {
+  return globalThis.__dcmvSiteRegistry?.getSiteAdapterForUrl?.(url) || null;
 }
 
 async function ensureViewerInjected(tabId) {
@@ -13,8 +13,27 @@ async function ensureViewerInjected(tabId) {
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["content.js"]
+    files: [
+      "site-registry.js",
+      "sites/arca-live.js",
+      "sites/blogspot.js",
+      "sites/fc2.js",
+      "sites/dcinside.js",
+      "sites/kone.js",
+      "viewer-common.js",
+      "viewer-ui.js",
+      "viewer-layout.js",
+      "viewer-hud.js",
+      "viewer-settings.js",
+      "viewer-navigation.js",
+      "viewer-page-loading.js",
+      "content.js"
+    ]
   });
+}
+
+async function syncPopupLabel() {
+  openButton.textContent = POPUP_BUTTON_LABEL;
 }
 
 openButton.addEventListener("click", async () => {
@@ -23,12 +42,14 @@ openButton.addEventListener("click", async () => {
     currentWindow: true
   });
 
-  if (!tab?.id || !isDcinsideUrl(tab.url)) {
+  const adapter = getCurrentAdapter(tab?.url);
+  if (!tab?.id || !adapter) {
     window.close();
     return;
   }
 
   try {
+    openButton.textContent = POPUP_BUTTON_LABEL;
     await ensureViewerInjected(tab.id);
     await chrome.tabs.sendMessage(tab.id, { type: "DCMV_OPEN" });
   } catch (_) {
@@ -36,4 +57,8 @@ openButton.addEventListener("click", async () => {
   } finally {
     window.close();
   }
+});
+
+syncPopupLabel().catch(() => {
+  openButton.textContent = POPUP_BUTTON_LABEL;
 });
