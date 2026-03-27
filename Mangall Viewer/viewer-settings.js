@@ -83,7 +83,7 @@
         targetState.firstPageSingle
       );
       targetState.settingsRtlValue.textContent = targetState.readingDirectionRTL
-        ? "우→좌"
+        ? "좌←우"
         : "좌→우";
       targetState.settingsRtlButton.classList.toggle(
         deps.toggleActiveClass,
