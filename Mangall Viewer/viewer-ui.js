@@ -126,7 +126,7 @@
       const rtlButton = button("dcmv-settings-item dcmv-settings-rtl", "toggle-rtl");
       rtlButton.append(
         el("span", "dcmv-settings-item-label", "페이지 읽는 순서"),
-        el("span", "dcmv-settings-item-value dcmv-settings-rtl-value", "좌<-우")
+        el("span", "dcmv-settings-item-value dcmv-settings-rtl-value", "좌←우")
       );
 
       const wasdButton = button(
