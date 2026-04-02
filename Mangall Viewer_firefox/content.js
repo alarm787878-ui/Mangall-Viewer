@@ -246,7 +246,7 @@
       useWasd: settings.useWasd === undefined ? true : !!settings.useWasd,
       autoFirstPageAdjust:
         settings.autoFirstPageAdjust === undefined
-          ? true
+          ? false
           : !!settings.autoFirstPageAdjust,
       manualPairingResetIndices: [],
       shouldReuseSavedAutoFirstPageSingle: false,
