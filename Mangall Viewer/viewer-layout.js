@@ -1,5 +1,48 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
+  const dcinsideComments = globalThis.__dcmvDcinsideComments || null;
+  const MAX_VIEWER_UPSCALE = 1.5;
+
+  function sizeViewerRenderBox(renderBox, item, displayType = "single") {
+    if (!(renderBox instanceof HTMLElement)) {
+      return;
+    }
+
+    const imageElement = renderBox.querySelector(":scope > .dcmv-image");
+    if (!(imageElement instanceof HTMLImageElement)) {
+      return;
+    }
+
+    const width = imageElement.naturalWidth;
+    const height = imageElement.naturalHeight;
+
+    if (!width || !height) {
+      renderBox.style.removeProperty("width");
+      renderBox.style.removeProperty("height");
+      return;
+    }
+
+    const availableWidth =
+      displayType === "pair"
+        ? Math.max(0, Math.floor(window.innerWidth / 2) - 4)
+        : Math.max(0, window.innerWidth - 4);
+    const availableHeight = Math.max(0, window.innerHeight - 4);
+    if (!availableWidth || !availableHeight) {
+      return;
+    }
+
+    const scale = Math.min(
+      MAX_VIEWER_UPSCALE,
+      availableWidth / width,
+      availableHeight / height
+    );
+    if (!Number.isFinite(scale) || scale <= 0) {
+      return;
+    }
+
+    renderBox.style.width = `${Math.max(1, Math.floor(width * scale))}px`;
+    renderBox.style.height = `${Math.max(1, Math.floor(height * scale))}px`;
+  }
 
   modules.layout = {
     rebuildStepsKeepingAnchor(targetState, anchorIndex, deps) {
@@ -135,7 +178,7 @@
 
       const resetIndices = Array.isArray(targetState?.manualPairingResetIndices)
         ? targetState.manualPairingResetIndices
-            .filter((index) => Number.isInteger(index) && index > 0)
+            .filter((index) => Number.isInteger(index) && index >= 0)
             .sort((a, b) => a - b)
         : [];
 
@@ -245,6 +288,8 @@
     renderCurrentStep(targetState, deps) {
       if (!targetState) return;
 
+      dcinsideComments?.restoreMovedCommentRoots?.();
+
       const step = targetState.currentStep;
 
       if (!step || !step.images.length) {
@@ -272,7 +317,25 @@
         renderImages = [step.images[1], step.images[0]];
       }
 
-      for (const item of renderImages) {
+      let layoutRefreshCoalesced = false;
+      const scheduleStepLayoutRefresh = () => {
+        if (layoutRefreshCoalesced) return;
+        layoutRefreshCoalesced = true;
+        queueMicrotask(() => {
+          layoutRefreshCoalesced = false;
+          deps.refreshViewerStepLayout?.();
+        });
+      };
+
+      for (let renderIndex = 0; renderIndex < renderImages.length; renderIndex += 1) {
+        const item = renderImages[renderIndex];
+        const pagePosition =
+          step.displayType === "pair"
+            ? renderIndex === 0
+              ? "left"
+              : "right"
+            : "single";
+
         if (item.failed) {
           const failedBox = document.createElement("div");
           failedBox.className = "dcmv-image dcmv-image-failed";
@@ -308,6 +371,7 @@
           queueMicrotask(() => {
             logFirstViewerImageLoad();
             deps.syncImageLoadingBarPosition();
+            scheduleStepLayoutRefresh();
           });
         } else {
           img.addEventListener(
@@ -315,6 +379,7 @@
             () => {
               logFirstViewerImageLoad();
               deps.syncImageLoadingBarPosition();
+              scheduleStepLayoutRefresh();
             },
             { once: true }
           );
@@ -325,6 +390,13 @@
             "error",
             () => {
               img.src = item.src;
+              img.addEventListener(
+                "load",
+                () => {
+                  scheduleStepLayoutRefresh();
+                },
+                { once: true }
+              );
             },
             { once: true }
           );
@@ -335,7 +407,15 @@
           deps.syncImageLoadingBarPosition();
         });
 
-        wrap.appendChild(img);
+        wrap.appendChild(
+          wrapViewerImageWithComments({
+            imageElement: img,
+            item,
+            pagePosition,
+            targetState,
+            displayType: step.displayType
+          })
+        );
       }
 
       targetState.stage.appendChild(wrap);
@@ -434,6 +514,74 @@
 
       targetState.stepIndex = idx;
       targetState.currentStep = targetState.steps[idx] || null;
+    },
+
+    refreshCurrentStepRenderBoxes(targetState) {
+      if (!targetState?.stage || !targetState?.currentStep?.images?.length) return;
+
+      const renderBoxes = targetState.stage.querySelectorAll(".dcmv-image-render-box");
+      for (const renderBox of renderBoxes) {
+        if (!(renderBox instanceof HTMLElement)) continue;
+        const itemIndex = Number(renderBox.dataset.dcmvImageIndex);
+        if (!Number.isInteger(itemIndex)) continue;
+        const item = targetState.currentStep.images.find((entry) => entry.index === itemIndex);
+        if (!item) continue;
+        sizeViewerRenderBox(renderBox, item, renderBox.dataset.dcmvDisplayType || targetState.currentStep.displayType || "single");
+      }
     }
   };
+
+  function buildViewerRenderBox(imageElement, item, displayType = "single") {
+    if (!(imageElement instanceof HTMLElement)) {
+      return imageElement;
+    }
+
+    const renderBox = document.createElement("div");
+    renderBox.className = "dcmv-image-render-box";
+    renderBox.dataset.dcmvImageIndex = `${item?.index ?? ""}`;
+    renderBox.dataset.dcmvDisplayType = displayType;
+    renderBox.appendChild(imageElement);
+
+    sizeViewerRenderBox(renderBox, item, displayType);
+    return renderBox;
+  }
+
+  function wrapViewerImageWithComments(options = {}) {
+    const { imageElement, item, pagePosition, targetState, displayType = "single" } = options;
+
+    if (!(imageElement instanceof HTMLElement)) {
+      return imageElement;
+    }
+
+    const renderBox = buildViewerRenderBox(imageElement, item, displayType);
+
+    if (!targetState?.isDcinsideSite || !targetState?.showImageComments || !dcinsideComments) {
+      return renderBox;
+    }
+
+      const isCollapsed =
+        dcinsideComments.isCommentCollapsedForSource?.(item?.element) || false;
+      const comments = isCollapsed
+        ? []
+        : dcinsideComments.collectImageCommentsForSourceItem?.(item?.element);
+      const originalCommentRoot = dcinsideComments.findOriginalCommentRoot?.(item?.element) || null;
+      const emptyCommentButton =
+        dcinsideComments.findEmptyCommentOpenButton?.(item?.element) || null;
+      const commentKey = dcinsideComments.getCommentSourceKey?.(item?.element) || "";
+      const hasComments = Array.isArray(comments) && comments.length > 0;
+
+      const side = dcinsideComments.getCommentSide?.({ pagePosition }) || "right";
+      return (
+        dcinsideComments.wrapImageWithComments?.({
+          imageElement,
+          sourceElement: item?.element || null,
+          comments: hasComments ? comments : [],
+          side,
+          titleText: `이미지 댓글 ${hasComments ? comments.length : 0}개`,
+          originalCommentRoot,
+          emptyCommentButton,
+          commentKey
+        }) || renderBox
+      );
+  }
 })();

@@ -5,21 +5,29 @@ function getCurrentAdapter(url) {
   return globalThis.__dcmvSiteRegistry?.getSiteAdapterForUrl?.(url) || null;
 }
 
-async function ensureViewerInjected(tabId) {
+function getSiteScriptFiles(adapter) {
+  if (!adapter?.id) return [];
+
+  const files = [`sites/${adapter.id}.js`];
+  if (adapter.id === "dcinside") {
+    files.push("sites/dcinside-comments.js");
+  }
+
+  return files;
+}
+
+async function ensureViewerInjected(tabId, adapter) {
   await chrome.scripting.insertCSS({
     target: { tabId },
     files: ["style.css"]
   });
 
+  const siteScriptFiles = getSiteScriptFiles(adapter);
   await chrome.scripting.executeScript({
     target: { tabId },
     files: [
       "site-registry.js",
-      "sites/arca-live.js",
-      "sites/blogspot.js",
-      "sites/fc2.js",
-      "sites/dcinside.js",
-      "sites/kone.js",
+      ...siteScriptFiles,
       "viewer-common.js",
       "viewer-ui.js",
       "viewer-layout.js",
@@ -50,7 +58,7 @@ openButton.addEventListener("click", async () => {
 
   try {
     openButton.textContent = POPUP_BUTTON_LABEL;
-    await ensureViewerInjected(tab.id);
+    await ensureViewerInjected(tab.id, adapter);
     await chrome.tabs.sendMessage(tab.id, { type: "DCMV_OPEN" });
   } catch (_) {
     void chrome.runtime.lastError;

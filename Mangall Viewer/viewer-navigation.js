@@ -52,6 +52,11 @@
         const state = deps.getState();
         if (!state) return;
 
+        if (canScrollInsideCommentPanel(e.target, e.deltaY)) {
+          e.stopPropagation();
+          return;
+        }
+
         if (state.isPagePickerOpen) {
           if (state.pagePicker.contains(e.target)) {
             e.stopPropagation();
@@ -104,6 +109,14 @@
 
       const resize = () => {
         if (!deps.getState()) return;
+        deps.refreshCurrentStepRenderBoxes?.();
+        deps.syncHudTrigger();
+        deps.syncImageLoadingBarPosition();
+      };
+
+      const fullscreenchange = () => {
+        if (!deps.getState()) return;
+        deps.refreshCurrentStepRenderBoxes?.();
         deps.syncHudTrigger();
         deps.syncImageLoadingBarPosition();
       };
@@ -156,7 +169,7 @@
           actionEl.blur();
           deps.syncToggleVisuals();
 
-          deps.saveSettings(deps.getSettingsSnapshot()).then(() => {
+          deps.saveSettings({ spreadEnabled: state.spreadEnabled }).then(() => {
             if (!deps.getState()) return;
             deps.rebuildStepsKeepingAnchor(anchor);
             deps.renderCurrentStep();
@@ -167,7 +180,7 @@
           actionEl.blur();
           deps.syncToggleVisuals();
 
-          deps.saveSettings(deps.getSettingsSnapshot()).then(() => {
+          deps.saveSettings({ readingDirectionRTL: state.readingDirectionRTL }).then(() => {
             if (!deps.getState()) return;
             deps.renderCurrentStep();
             deps.syncHudTrigger();
@@ -179,7 +192,7 @@
           actionEl.blur();
           deps.syncToggleVisuals();
 
-          deps.saveSettings(deps.getSettingsSnapshot()).then(() => {
+          deps.saveSettings({ firstPageSingle: state.firstPageSingle }).then(() => {
             if (!deps.getState()) return;
             deps.rebuildStepsKeepingAnchor(anchor);
             deps.renderCurrentStep();
@@ -193,12 +206,34 @@
           state.useWasd = !state.useWasd;
           actionEl.blur();
           deps.syncToggleVisuals();
-          deps.saveSettings(deps.getSettingsSnapshot());
+          deps.saveSettings({ useWasd: state.useWasd });
         } else if (action === "toggle-auto-first-page-adjust") {
           state.autoFirstPageAdjust = !state.autoFirstPageAdjust;
           actionEl.blur();
           deps.syncToggleVisuals();
-          deps.saveSettings(deps.getSettingsSnapshot());
+          deps.saveSettings({ autoFirstPageAdjust: state.autoFirstPageAdjust });
+        } else if (action === "toggle-auto-fullscreen") {
+          state.autoFullscreen = !state.autoFullscreen;
+          actionEl.blur();
+          deps.syncToggleVisuals();
+          deps.saveSettings({ autoFullscreen: state.autoFullscreen });
+          // 설정 변경 시 전체화면 상태 동기화
+          if (state.autoFullscreen) {
+            deps.requestFullscreen?.();
+          } else {
+            deps.exitFullscreen?.();
+          }
+        } else if (action === "toggle-image-comments") {
+          state.showImageComments = !state.showImageComments;
+          actionEl.blur();
+          deps.syncToggleVisuals();
+          deps.syncDcImageCommentsForViewer?.();
+
+          deps.saveSettings({ showImageComments: state.showImageComments }).then(() => {
+            if (!deps.getState()) return;
+            deps.renderCurrentStep();
+            deps.syncHudTrigger();
+          });
         } else if (action === "reset-pairing-from-current") {
           const anchor = deps.getCurrentAnchorIndex();
           const resetIndex = Math.max(0, anchor);
@@ -281,6 +316,7 @@
         mousemove,
         docMouseleave,
         resize,
+        fullscreenchange,
         hudMouseenter,
         hudMouseleave,
         click,
@@ -293,6 +329,7 @@
       document.addEventListener("mousemove", mousemove, true);
       document.addEventListener("mouseleave", docMouseleave, true);
       window.addEventListener("resize", resize, true);
+      document.addEventListener("fullscreenchange", fullscreenchange, true);
 
       targetState.overlay.addEventListener("wheel", wheel, { passive: false });
       targetState.overlay.addEventListener("click", click, true);
@@ -514,4 +551,14 @@
       return modules.layout?.goToPageIndex?.(targetState, pageIndex, options, deps);
     }
   };
+
+  function canScrollInsideCommentPanel(target, deltaY) {
+    if (!(target instanceof Element)) return false;
+
+    const panel =
+      target.closest(".dcmv-dc-comment-panel-list") ||
+      target.closest(".dcmv-dc-comment-host");
+    if (!(panel instanceof HTMLElement)) return false;
+    return true;
+  }
 })();

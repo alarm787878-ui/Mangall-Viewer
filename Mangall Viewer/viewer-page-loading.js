@@ -645,9 +645,7 @@
             );
             targetState.currentStep =
               targetState.steps[targetState.stepIndex] || targetState.currentStep;
-            if (deps.didCurrentStepRenderUrlsChange(previousRenderUrls)) {
-              deps.syncCurrentStepImagesFromSourceItems();
-            }
+            deps.syncCurrentStepImagesFromSourceItems();
           }
         } else {
           didChange = true;

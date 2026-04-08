@@ -129,6 +129,20 @@
         el("span", "dcmv-settings-item-value dcmv-settings-rtl-value", "좌←우")
       );
 
+      const autoFullscreenButton = button(
+        "dcmv-settings-item dcmv-settings-auto-fullscreen",
+        "toggle-auto-fullscreen"
+      );
+      const autoFullscreenSwitch = el(
+        "span",
+        "dcmv-settings-switch dcmv-settings-auto-fullscreen-switch"
+      );
+      autoFullscreenSwitch.setAttribute("aria-hidden", "true");
+      autoFullscreenButton.append(
+        el("span", "dcmv-settings-item-label", "자동 전체화면"),
+        autoFullscreenSwitch
+      );
+
       const wasdButton = button(
         "dcmv-settings-item dcmv-settings-use-wasd",
         "toggle-use-wasd"
@@ -149,6 +163,20 @@
       autoFirstPageButton.append(
         el("span", "dcmv-settings-item-label", "첫 페이지가 단면 자동 조정"),
         autoFirstPageSwitch
+      );
+
+      const imageCommentsButton = button(
+        "dcmv-settings-item dcmv-settings-image-comments",
+        "toggle-image-comments"
+      );
+      const imageCommentsSwitch = el(
+        "span",
+        "dcmv-settings-switch dcmv-settings-image-comments-switch"
+      );
+      imageCommentsSwitch.setAttribute("aria-hidden", "true");
+      imageCommentsButton.append(
+        el("span", "dcmv-settings-item-label", "이미지 댓글 표시"),
+        imageCommentsSwitch
       );
 
       const manualResetDivider = el("div", "dcmv-settings-divider dcmv-settings-divider-manual");
@@ -181,8 +209,10 @@
 
       settingsMenu.append(
         rtlButton,
+        autoFullscreenButton,
         wasdButton,
         autoFirstPageButton,
+        imageCommentsButton,
         manualResetDivider,
         manualPairingResetButton
       );
