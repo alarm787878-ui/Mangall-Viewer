@@ -767,6 +767,7 @@
     ) {
       return;
     }
+    // 중복 바인딩 방지
     if (panel.dataset.dcmvBound === "true") return;
 
     panel.dataset.dcmvBound = "true";
@@ -834,7 +835,7 @@
       }
 
       const sourceButton =
-        target.closest(".btn_image_comment, .btn_gallnickuse, .btn_circledel");
+        target.closest(".btn_image_comment, .btn_gallnickuse, .btn_circledel, .btn_blue");
       if (sourceButton instanceof HTMLButtonElement) {
         const originalButton = findMatchingSourceControl(panel, sourceButton);
         if (originalButton instanceof HTMLButtonElement) {
@@ -847,7 +848,49 @@
               view: window
             })
           );
-          dispatchCommentRefresh(180);
+          // 댓글 submit 후 상태만 초기화 (뷰어가 알아서 rebuild 하도록)
+          const commentKey = panel.dataset.commentKey || "";
+          const imageArea = getSourceImageArea(panel);
+          if (commentKey) {
+            moduleState.emptyCommentStates.delete(commentKey);
+            setCommentCollapsedState(commentKey, false);
+          }
+          // btn_imgcmtopen 버튼을 'Y'로 변경 (이제 댓글 있다고 표시)
+          const emptyBtn = panel.__dcmvEmptyCommentButton || findEmptyCommentOpenButton(panel.__dcmvSourceElement);
+          if (emptyBtn instanceof HTMLButtonElement) {
+            emptyBtn.setAttribute("data-has-comment", "Y");
+          }
+          const sourceEl = panel.__dcmvSourceElement;
+          // 0.5초 후 디시 새로고침 → 댓글창 펼치기 → .img_comment.open 생성 확인 → 뷰어 refresh
+          if (imageArea instanceof Element) {
+            window.setTimeout(() => {
+              const refreshBtn = imageArea.querySelector(".btn_img_cmt_refresh, .btn_cmt_refresh");
+              if (refreshBtn instanceof HTMLButtonElement) {
+                refreshBtn.click();
+              }
+              // 새로고침 후 댓글창이 접혀있으면 펼치기
+              window.setTimeout(() => {
+                const openBtn = imageArea.querySelector(".btn_imgcmtopen:not([style*='display: none'])");
+                if (openBtn instanceof HTMLButtonElement) {
+                  openBtn.click();
+                }
+                // .img_comment.open이 실제로 생성될 때까지 대기
+                let checkCount = 0;
+                const maxChecks = 20;  // 최대 2초 (100ms * 20)
+                const checkInterval = window.setInterval(() => {
+                  checkCount++;
+                  const expandedRoot = imageArea.querySelector(".img_comment.open");
+                  if (expandedRoot instanceof HTMLElement || checkCount >= maxChecks) {
+                    window.clearInterval(checkInterval);
+                    // 뷰어 refresh (wrapImageWithComments에서 자동으로 바인딩됨)
+                    dispatchCommentRefresh();
+                  }
+                }, 100);
+              }, 400);
+            }, 500);
+          } else {
+            dispatchCommentRefresh(2500);
+          }
         }
         return;
       }
@@ -1598,6 +1641,7 @@
   opacity: 1 !important;
   visibility: visible !important;
 }
+
 .dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-panel > * {
   opacity: 1 !important;
   visibility: visible !important;
@@ -2047,6 +2091,10 @@
     } else {
       if (emptyCommentButton) {
         panel.dataset.commentExpanded = "true";
+      }
+      // 사용자가 접은 상태면 강제로 false로 설정
+      if (commentKey && moduleState.collapsedCommentKeys.has(commentKey)) {
+        panel.dataset.commentExpanded = "false";
       }
       normalizeOriginalCommentWriteBox(panel);
       // 댓글 있는 패널이므로 hasComments=true → 눈 아이콘 추가
