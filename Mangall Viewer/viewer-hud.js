@@ -5,8 +5,20 @@
     syncHudTrigger(targetState, deps) {
       if (!targetState) return;
 
-      const hudStyle = window.getComputedStyle(targetState.hud);
-      const bottom = Number.parseFloat(hudStyle.bottom) || 0;
+      if (!targetState.hud.dataset.dcmvBaseBottom) {
+        const initialHudStyle = window.getComputedStyle(targetState.hud);
+        targetState.hud.dataset.dcmvBaseBottom = `${Number.parseFloat(initialHudStyle.bottom) || 0}`;
+      }
+
+      const baseBottom = Number.parseFloat(targetState.hud.dataset.dcmvBaseBottom || "0") || 0;
+      const commentOffset =
+        Number.parseFloat(
+          window.getComputedStyle(document.documentElement)
+            .getPropertyValue("--dcmv-hud-bottom-offset")
+            .trim() || "0"
+        ) || 0;
+      const bottom = baseBottom + commentOffset;
+      targetState.hud.style.bottom = `${bottom}px`;
       const width = targetState.hud.offsetWidth;
       const height = targetState.hud.offsetHeight;
       const left = Math.max(0, (window.innerWidth - width) / 2);

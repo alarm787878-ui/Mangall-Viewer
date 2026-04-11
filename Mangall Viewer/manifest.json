@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "만갤 뷰어 - dcinside Image Viewer",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "디시인사이드에서 이미지를 양면 전체화면으로 편하게 볼 수 있는 뷰어입니다.",
   "permissions": [
     "contextMenus",

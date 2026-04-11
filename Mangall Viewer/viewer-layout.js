@@ -3,7 +3,31 @@
   const dcinsideComments = globalThis.__dcmvDcinsideComments || null;
   const MAX_VIEWER_UPSCALE = 1.5;
 
-  function sizeViewerRenderBox(renderBox, item, displayType = "single") {
+  function calculateScale(width, height, displayType = "single") {
+    if (!width || !height) return null;
+
+    const availableWidth =
+      displayType === "pair"
+        ? Math.max(0, Math.floor(window.innerWidth / 2) - 4)
+        : Math.max(0, window.innerWidth - 4);
+    const availableHeight = Math.max(0, window.innerHeight - 4);
+    if (!availableWidth || !availableHeight) {
+      return null;
+    }
+
+    const scale = Math.min(
+      MAX_VIEWER_UPSCALE,
+      availableWidth / width,
+      availableHeight / height
+    );
+    if (!Number.isFinite(scale) || scale <= 0) {
+      return null;
+    }
+
+    return scale;
+  }
+
+  function sizeViewerRenderBox(renderBox, item, displayType = "single", heightScale = null) {
     if (!(renderBox instanceof HTMLElement)) {
       return;
     }
@@ -22,26 +46,22 @@
       return;
     }
 
-    const availableWidth =
-      displayType === "pair"
-        ? Math.max(0, Math.floor(window.innerWidth / 2) - 4)
-        : Math.max(0, window.innerWidth - 4);
-    const availableHeight = Math.max(0, window.innerHeight - 4);
-    if (!availableWidth || !availableHeight) {
+    // heightScale이 있으면 높이 맞춤 모드 (너비는 비율대로)
+    if (heightScale !== null && heightScale > 0) {
+      renderBox.style.width = `${Math.max(0.1, width * heightScale)}px`;
+      renderBox.style.height = `${Math.max(0.1, height * heightScale)}px`;
       return;
     }
 
-    const scale = Math.min(
-      MAX_VIEWER_UPSCALE,
-      availableWidth / width,
-      availableHeight / height
-    );
-    if (!Number.isFinite(scale) || scale <= 0) {
+    const scale = calculateScale(width, height, displayType);
+    if (scale === null || scale <= 0) {
+      renderBox.style.removeProperty("width");
+      renderBox.style.removeProperty("height");
       return;
     }
 
-    renderBox.style.width = `${Math.max(1, Math.floor(width * scale))}px`;
-    renderBox.style.height = `${Math.max(1, Math.floor(height * scale))}px`;
+    renderBox.style.width = `${Math.max(0.1, width * scale)}px`;
+    renderBox.style.height = `${Math.max(0.1, height * scale)}px`;
   }
 
   modules.layout = {
@@ -327,6 +347,33 @@
         });
       };
 
+      // 양면 페이지일 때 높이 맞춤 (height 우선 + 가로 보정)
+      let pairScale = null;
+      if (step.displayType === "pair" && renderImages.length === 2) {
+        const itemA = renderImages[0];
+        const itemB = renderImages[1];
+        if (itemA?.height && itemB?.height && itemA?.width && itemB?.width) {
+          // 1. height 기준으로 scale 계산 (작은 높이 기준)
+          const baseHeight = Math.min(itemA.height, itemB.height);
+          const availableHeight = Math.max(0, window.innerHeight - 4);
+          let scale = Math.min(
+            MAX_VIEWER_UPSCALE,
+            availableHeight / baseHeight
+          );
+
+          // 2. 가로 합계가 화면 넘치면 전체 축소
+          const availableWidth = Math.max(0, window.innerWidth - 4);
+          const scaledWidthA = itemA.width * (baseHeight / itemA.height) * scale;
+          const scaledWidthB = itemB.width * (baseHeight / itemB.height) * scale;
+          const totalWidth = scaledWidthA + scaledWidthB;
+          if (totalWidth > availableWidth) {
+            scale *= availableWidth / totalWidth;
+          }
+
+          pairScale = scale;
+        }
+      }
+
       for (let renderIndex = 0; renderIndex < renderImages.length; renderIndex += 1) {
         const item = renderImages[renderIndex];
         const pagePosition =
@@ -335,6 +382,8 @@
               ? "left"
               : "right"
             : "single";
+        // 양면 페이지 높이 맞춤 scale 계산 (pairScale 사용)
+        const heightScale = (pairScale && item?.height) ? (pairScale * Math.min(renderImages[0]?.height, renderImages[1]?.height)) / item.height : null;
 
         if (item.failed) {
           const failedBox = document.createElement("div");
@@ -413,7 +462,8 @@
             item,
             pagePosition,
             targetState,
-            displayType: step.displayType
+            displayType: step.displayType,
+            heightScale
           })
         );
       }
@@ -519,19 +569,49 @@
     refreshCurrentStepRenderBoxes(targetState) {
       if (!targetState?.stage || !targetState?.currentStep?.images?.length) return;
 
-      const renderBoxes = targetState.stage.querySelectorAll(".dcmv-image-render-box");
+      const renderBoxes = Array.from(targetState.stage.querySelectorAll(".dcmv-image-render-box"));
+      const displayType = targetState.currentStep.displayType || "single";
+
+      // 양면 페이지일 때 pairScale 계산
+      let pairScale = null;
+      let baseHeight = null;
+      if (displayType === "pair" && renderBoxes.length === 2) {
+        const items = renderBoxes
+          .map((box) => {
+            const idx = Number(box.dataset.dcmvImageIndex);
+            return targetState.currentStep.images.find((entry) => entry.index === idx);
+          })
+          .filter(Boolean);
+        if (items.length === 2 && items[0]?.height && items[1]?.height && items[0]?.width && items[1]?.width) {
+          const itemA = items[0];
+          const itemB = items[1];
+          baseHeight = Math.min(itemA.height, itemB.height);
+          const availableHeight = Math.max(0, window.innerHeight - 4);
+          let scale = Math.min(MAX_VIEWER_UPSCALE, availableHeight / baseHeight);
+          const availableWidth = Math.max(0, window.innerWidth - 4);
+          const scaledWidthA = itemA.width * (baseHeight / itemA.height) * scale;
+          const scaledWidthB = itemB.width * (baseHeight / itemB.height) * scale;
+          const totalWidth = scaledWidthA + scaledWidthB;
+          if (totalWidth > availableWidth) {
+            scale *= availableWidth / totalWidth;
+          }
+          pairScale = scale;
+        }
+      }
+
       for (const renderBox of renderBoxes) {
         if (!(renderBox instanceof HTMLElement)) continue;
         const itemIndex = Number(renderBox.dataset.dcmvImageIndex);
         if (!Number.isInteger(itemIndex)) continue;
         const item = targetState.currentStep.images.find((entry) => entry.index === itemIndex);
         if (!item) continue;
-        sizeViewerRenderBox(renderBox, item, renderBox.dataset.dcmvDisplayType || targetState.currentStep.displayType || "single");
+        const heightScale = (pairScale && baseHeight && item?.height) ? (pairScale * baseHeight) / item.height : null;
+        sizeViewerRenderBox(renderBox, item, renderBox.dataset.dcmvDisplayType || displayType, heightScale);
       }
     }
   };
 
-  function buildViewerRenderBox(imageElement, item, displayType = "single") {
+  function buildViewerRenderBox(imageElement, item, displayType = "single", heightScale = null) {
     if (!(imageElement instanceof HTMLElement)) {
       return imageElement;
     }
@@ -542,18 +622,18 @@
     renderBox.dataset.dcmvDisplayType = displayType;
     renderBox.appendChild(imageElement);
 
-    sizeViewerRenderBox(renderBox, item, displayType);
+    sizeViewerRenderBox(renderBox, item, displayType, heightScale);
     return renderBox;
   }
 
   function wrapViewerImageWithComments(options = {}) {
-    const { imageElement, item, pagePosition, targetState, displayType = "single" } = options;
+    const { imageElement, item, pagePosition, targetState, displayType = "single", heightScale = null } = options;
 
     if (!(imageElement instanceof HTMLElement)) {
       return imageElement;
     }
 
-    const renderBox = buildViewerRenderBox(imageElement, item, displayType);
+    const renderBox = buildViewerRenderBox(imageElement, item, displayType, heightScale);
 
     if (!targetState?.isDcinsideSite || !targetState?.showImageComments || !dcinsideComments) {
       return renderBox;

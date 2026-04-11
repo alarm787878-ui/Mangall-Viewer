@@ -14,9 +14,14 @@
     emptyCommentStates: new Map()
   };
   const COMMENT_EXPAND_EVENT = "dcmv:dcinside-comment-expanded";
+  const COMMENT_LAYOUT_EVENT = "dcmv:dcinside-comment-layout-updated";
   const SIDE_COMMENT_BELOW_EM = 8;
   const SIDE_COMMENT_MAX_WIDTH = 320;
   const EMPTY_COMMENT_TRIGGER_SIZE = 200;
+  const BELOW_PREVIEW_MAX_COMMENTS = 3;
+  const BELOW_PREVIEW_LINE_HEIGHT = 1.35;
+  const BELOW_PREVIEW_VERTICAL_PADDING_EM = 0.9;
+  const BELOW_PREVIEW_ROW_GAP_EM = 0.2;
 
   // 눈 아이콘 설정: true = 항상 표시, false = 마우스 올려야 표시
   // 외부(viewer-settings.js)에서 설정값 주입 및 저장 콜백 제공
@@ -446,6 +451,10 @@
 
   function requestCommentRefresh() {
     document.dispatchEvent(new CustomEvent(COMMENT_EXPAND_EVENT));
+  }
+
+  function notifyCommentLayoutUpdated() {
+    document.dispatchEvent(new CustomEvent(COMMENT_LAYOUT_EVENT));
   }
 
   function refreshCommentsAfterDomMutation(target, fallbackDelay = 240) {
@@ -944,6 +953,7 @@
     style.textContent = `
 .dcmv-dc-comment-layout {
   --dcmv-dc-comment-gap: 12px;
+  --dcmv-dc-below-panel-height: 1em;
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -1004,48 +1014,65 @@
   width: var(--dcmv-dc-comment-below-width, 100%);
   max-width: var(--dcmv-dc-comment-below-width, 100%);
   flex: 0 0 auto;
-  max-height: 8em;
+  min-height: var(--dcmv-dc-below-panel-height);
+  max-height: var(--dcmv-dc-below-panel-height);
   margin-top: 0.5em;
   transform: none !important;
 }
 
 .dcmv-dc-comment-layout[data-comment-placement="below"] > .dcmv-image-render-box {
   flex: 0 1 auto;
-  max-height: calc(100vh - 9em);
+  max-height: calc(100vh - var(--dcmv-dc-below-panel-height) - 0.75em);
   max-width: 100%;
   width: fit-content !important;
   margin: 0 auto;
 }
 
-.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-panel-title {
-  padding: 0.5em 0.75em;
-  font-size: 0.75rem;
-  line-height: 1.2;
-}
-
-.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item {
-  padding: 0.5em 0.75em 0.6em;
-}
-
-.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-meta {
-  font-size: 0.6875rem;
-  line-height: 1.25;
-}
-
-.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-text {
-  margin-top: 0.25em;
-  font-size: 0.75rem;
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-panel-below-preview {
+  border: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 
-.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-image {
-  max-height: 4em;
-  margin-top: 0.375em;
+.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-panel-list-below-preview {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: ${BELOW_PREVIEW_ROW_GAP_EM}em;
+  height: 100%;
+  padding: ${BELOW_PREVIEW_VERTICAL_PADDING_EM / 2}em 0.7em;
+  box-sizing: border-box;
+}
+
+.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-below-preview {
+  padding: 0;
+  min-height: 0;
+}
+
+.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-preview-line {
+  display: grid;
+  grid-template-columns: minmax(0, var(--dcmv-dc-below-preview-nick-width, 0px)) minmax(0, 1fr);
+  column-gap: 0.45em;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 0.75rem;
+  line-height: ${BELOW_PREVIEW_LINE_HEIGHT};
+}
+
+.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-preview-writer,
+.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-preview-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-preview-writer {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-item-preview-text {
+  color: #f5f5f5;
 }
 
 .dcmv-dc-comment-layout[data-comment-side="left"] .dcmv-dc-comment-panel {
@@ -1219,7 +1246,7 @@
   display: block;
   visibility: hidden;
   pointer-events: none;
-  min-height: var(--dcmv-dc-empty-below-height, 0px);
+  min-height: var(--dcmv-dc-below-panel-height);
 }
 
 .dcmv-dc-comment-panel-title {
@@ -1585,7 +1612,8 @@
   .dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-panel {
     width: 100%;
     max-width: 100%;
-    max-height: 8em;
+    min-height: var(--dcmv-dc-below-panel-height);
+    max-height: var(--dcmv-dc-below-panel-height);
   }
 }
 
@@ -1709,6 +1737,107 @@
     return actionBox;
   }
 
+  function setCommentPanelRenderData(panel, comments, titleText) {
+    if (!(panel instanceof HTMLElement)) return panel;
+    panel.__dcmvPreviewComments = Array.isArray(comments) ? comments.slice() : [];
+    panel.__dcmvTitleText = titleText || "";
+    return panel;
+  }
+
+  function normalizeBelowPreviewWriter(writer) {
+    if (!writer) return "";
+
+    return String(writer)
+      .replace(/\s*\((?:\d{1,3}\.){2,3}\d{1,3}\)\s*$/u, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function truncateBelowPreviewWriter(writer, maxLength = 5) {
+    const normalizedWriter = normalizeBelowPreviewWriter(writer);
+    if (!normalizedWriter) return "";
+
+    const chars = Array.from(normalizedWriter);
+    if (chars.length <= maxLength) {
+      return normalizedWriter;
+    }
+
+    return `${chars.slice(0, maxLength).join("")}...`;
+  }
+
+  function getBelowPreviewCommentText(comment) {
+    if (!comment || typeof comment !== "object") return "";
+
+    return comment.text || (comment.imageUrl ? comment.imageAlt || "이미지 댓글" : "") || "";
+  }
+
+  function getBelowPreviewNickWidthEm(comments) {
+    const previewComments = Array.isArray(comments)
+      ? comments.slice(0, BELOW_PREVIEW_MAX_COMMENTS)
+      : [];
+    const maxLength = previewComments.reduce((maxValue, comment) => {
+      const displayWriter = truncateBelowPreviewWriter(comment?.writer || "");
+      return Math.max(maxValue, Array.from(displayWriter).length);
+    }, 0);
+
+    if (!maxLength) {
+      return 0;
+    }
+
+    return Math.min(6.2, Math.max(2.2, maxLength * 0.82 + 0.5));
+  }
+
+  function createBelowPreviewPanel(comments, titleText) {
+    const panel = document.createElement("aside");
+    panel.className = "dcmv-dc-comment-panel dcmv-dc-comment-panel-below-preview";
+    setCommentPanelRenderData(panel, comments, titleText);
+
+    const list = document.createElement("div");
+    list.className = "dcmv-dc-comment-panel-list dcmv-dc-comment-panel-list-below-preview";
+
+    const previewComments = Array.isArray(comments)
+      ? comments.slice(0, BELOW_PREVIEW_MAX_COMMENTS)
+      : [];
+    panel.style.setProperty(
+      "--dcmv-dc-below-preview-line-count",
+      `${Math.max(previewComments.length, 1)}`
+    );
+    const nickWidthEm = getBelowPreviewNickWidthEm(previewComments);
+    if (nickWidthEm > 0) {
+      panel.style.setProperty("--dcmv-dc-below-preview-nick-width", `${nickWidthEm}em`);
+    } else {
+      panel.style.removeProperty("--dcmv-dc-below-preview-nick-width");
+    }
+
+    for (const comment of previewComments) {
+      const item = document.createElement("article");
+      item.className = "dcmv-dc-comment-item dcmv-dc-comment-item-below-preview";
+
+      const line = document.createElement("div");
+      line.className = "dcmv-dc-comment-item-preview-line";
+
+      const writer = truncateBelowPreviewWriter(comment?.writer || "");
+      if (writer) {
+        const writerSpan = document.createElement("span");
+        writerSpan.className = "dcmv-dc-comment-item-preview-writer";
+        writerSpan.textContent = writer;
+        line.appendChild(writerSpan);
+      }
+
+      const textSpan = document.createElement("span");
+      textSpan.className = "dcmv-dc-comment-item-preview-text";
+      textSpan.textContent = getBelowPreviewCommentText(comment) || "이미지 댓글";
+      line.appendChild(textSpan);
+
+      item.appendChild(line);
+
+      list.appendChild(item);
+    }
+
+    panel.appendChild(list);
+    return panel;
+  }
+
   function syncEyeButtons() {
     document.querySelectorAll(".dcmv-dc-comment-eye-btn").forEach((btn) => {
       const slashed = !alwaysShowComments;
@@ -1720,6 +1849,7 @@
   function createCommentPanel(comments, titleText) {
     const panel = document.createElement("aside");
     panel.className = "dcmv-dc-comment-panel";
+    setCommentPanelRenderData(panel, comments, titleText);
     const hasComments = Array.isArray(comments) && comments.length > 0;
 
     if (!hasComments) {
@@ -1802,16 +1932,167 @@
     };
   }
 
+  function getSideCommentPanel(layout) {
+    return layout?.__dcmvSideCommentPanel instanceof HTMLElement
+      ? layout.__dcmvSideCommentPanel
+      : null;
+  }
+
+  function getBelowCommentPanel(layout) {
+    return layout?.__dcmvBelowCommentPanel instanceof HTMLElement
+      ? layout.__dcmvBelowCommentPanel
+      : null;
+  }
+
+  function replaceLayoutPanel(layout, nextPanel) {
+    if (!(layout instanceof HTMLElement) || !(nextPanel instanceof HTMLElement)) return nextPanel;
+
+    const currentPanel = layout.querySelector(":scope > .dcmv-dc-comment-panel");
+    if (currentPanel === nextPanel) return nextPanel;
+
+    if (currentPanel instanceof HTMLElement) {
+      currentPanel.replaceWith(nextPanel);
+    } else {
+      layout.appendChild(nextPanel);
+    }
+
+    return nextPanel;
+  }
+
+  function ensureBelowCommentPanel(layout) {
+    if (!(layout instanceof HTMLElement)) return null;
+
+    const currentPanel = layout.querySelector(":scope > .dcmv-dc-comment-panel");
+    if (
+      currentPanel instanceof HTMLElement &&
+      currentPanel.classList.contains("dcmv-dc-comment-panel-empty")
+    ) {
+      return currentPanel;
+    }
+
+    let belowPanel = getBelowCommentPanel(layout);
+    if (!(belowPanel instanceof HTMLElement)) {
+      const sidePanel = getSideCommentPanel(layout);
+      if (!(sidePanel instanceof HTMLElement)) {
+        return currentPanel instanceof HTMLElement ? currentPanel : null;
+      }
+
+      belowPanel = createBelowPreviewPanel(sidePanel.__dcmvPreviewComments || [], sidePanel.__dcmvTitleText || "");
+      applyCommentPanelMeta(belowPanel, {
+        commentKey: sidePanel.dataset.commentKey || "",
+        sourceElement: sidePanel.__dcmvSourceElement || null,
+        emptyCommentButton: sidePanel.__dcmvEmptyCommentButton || null
+      });
+      layout.__dcmvBelowCommentPanel = belowPanel;
+    }
+
+    return replaceLayoutPanel(layout, belowPanel);
+  }
+
+  function getBelowPreviewPanelHeightPx(panel) {
+    if (!(panel instanceof HTMLElement)) return 0;
+    if (!panel.classList.contains("dcmv-dc-comment-panel-below-preview")) return 0;
+
+    const list = panel.querySelector(".dcmv-dc-comment-panel-list-below-preview");
+    const lines = panel.querySelectorAll(".dcmv-dc-comment-item-preview-line");
+    const lineCount = Math.max(1, lines.length || 0);
+    if (!(list instanceof HTMLElement)) return 0;
+
+    const listStyle = window.getComputedStyle(list);
+    const firstLine =
+      lines.length > 0 && lines[0] instanceof HTMLElement ? lines[0] : null;
+    const lineStyle = firstLine ? window.getComputedStyle(firstLine) : null;
+    const lineHeight = lineStyle ? parseFloat(lineStyle.lineHeight || "0") : 0;
+    const paddingTop = parseFloat(listStyle.paddingTop || "0") || 0;
+    const paddingBottom = parseFloat(listStyle.paddingBottom || "0") || 0;
+    const rowGap =
+      parseFloat(listStyle.rowGap || listStyle.gap || "0") || 0;
+
+    return Math.ceil(
+      paddingTop +
+      paddingBottom +
+      lineCount * Math.max(lineHeight, 0) +
+      Math.max(0, lineCount - 1) * rowGap
+    );
+  }
+
+  function syncBelowPanelHeight(layout, forcedHeightPx = 0) {
+    if (!(layout instanceof HTMLElement)) return;
+    const panel = layout.querySelector(":scope > .dcmv-dc-comment-panel");
+    if (!(panel instanceof HTMLElement)) return;
+
+    if (layout.dataset.commentPlacement !== "below") {
+      layout.style.removeProperty("--dcmv-dc-below-panel-height");
+      return;
+    }
+
+    let heightPx = Math.max(0, forcedHeightPx || 0);
+    if (!heightPx) {
+      if (panel.classList.contains("dcmv-dc-comment-panel-below-preview")) {
+        heightPx = getBelowPreviewPanelHeightPx(panel);
+      } else if (panel.classList.contains("dcmv-dc-comment-panel-empty")) {
+        heightPx = 0;
+      } else {
+        heightPx = Math.ceil(panel.getBoundingClientRect().height);
+      }
+    }
+
+    if (heightPx > 0) {
+      layout.style.setProperty("--dcmv-dc-below-panel-height", `${heightPx}px`);
+    } else {
+      layout.style.removeProperty("--dcmv-dc-below-panel-height");
+    }
+  }
+
+  function updateHudBottomOffset() {
+    const belowPanels = Array.from(
+      document.querySelectorAll(
+        ".dcmv-dc-comment-layout[data-comment-placement=\"below\"] > .dcmv-dc-comment-panel"
+      )
+    ).filter((panel) => panel instanceof HTMLElement);
+
+    const maxOffsetPx = belowPanels.reduce((maxValue, panel) => {
+      if (!(panel instanceof HTMLElement)) return maxValue;
+      const panelStyle = window.getComputedStyle(panel);
+      const marginTop = parseFloat(panelStyle.marginTop || "0") || 0;
+      return Math.max(maxValue, Math.ceil(panel.getBoundingClientRect().height + marginTop));
+    }, 0);
+
+    const rootStyle = document.documentElement?.style;
+    if (!rootStyle) return;
+
+    if (maxOffsetPx > 0) {
+      rootStyle.setProperty("--dcmv-hud-bottom-offset", `${maxOffsetPx}px`);
+    } else {
+      rootStyle.removeProperty("--dcmv-hud-bottom-offset");
+    }
+
+    notifyCommentLayoutUpdated();
+  }
+
+  function ensureSideCommentPanel(layout) {
+    if (!(layout instanceof HTMLElement)) return null;
+
+    const sidePanel = getSideCommentPanel(layout);
+    if (!(sidePanel instanceof HTMLElement)) {
+      return layout.querySelector(":scope > .dcmv-dc-comment-panel");
+    }
+
+    return replaceLayoutPanel(layout, sidePanel);
+  }
+
   function updateCommentLayoutSize(layout) {
     if (!(layout instanceof HTMLElement)) return;
 
     const pairWrap = layout.parentElement;
     if (pairWrap instanceof HTMLElement && pairWrap.classList.contains("dcmv-page-pair")) {
       updatePairCommentLayouts(pairWrap);
+      updateHudBottomOffset();
       return;
     }
 
     updateSingleCommentLayout(layout);
+    updateHudBottomOffset();
   }
 
   function applyEmptyCommentPlacement(layout, imageElement) {
@@ -1847,6 +2128,8 @@
         "--dcmv-dc-comment-below-width",
         `${Math.floor(imageElement.getBoundingClientRect().width)}px`
       );
+      ensureBelowCommentPanel(layout);
+      syncBelowPanelHeight(layout);
       return;
     }
 
@@ -1854,6 +2137,8 @@
     layout.style.setProperty("--dcmv-dc-comment-width", `${sideMetrics.width}px`);
     layout.style.removeProperty("--dcmv-dc-comment-below-width");
     layout.dataset.commentInset = "";
+    ensureSideCommentPanel(layout);
+    layout.style.removeProperty("--dcmv-dc-below-panel-height");
   }
 
   function updateSingleCommentLayout(layout, options = {}) {
@@ -1997,18 +2282,23 @@
         .filter((panel) => panel instanceof HTMLElement);
       const maxBelowHeight = panels.reduce((maxHeight, panel) => {
         if (!(panel instanceof HTMLElement)) return maxHeight;
+        const previewHeightPx = getBelowPreviewPanelHeightPx(panel);
+        if (previewHeightPx > 0) {
+          return Math.max(maxHeight, previewHeightPx);
+        }
+
         if (panel.classList.contains("dcmv-dc-comment-panel-empty")) return maxHeight;
         return Math.max(maxHeight, Math.ceil(panel.getBoundingClientRect().height));
       }, 0);
 
       for (const layout of layouts) {
         if (!(layout instanceof HTMLElement)) continue;
-        layout.style.setProperty("--dcmv-dc-empty-below-height", `${maxBelowHeight}px`);
+        syncBelowPanelHeight(layout, Math.max(maxBelowHeight, 0));
       }
     } else {
       for (const layout of layouts) {
         if (!(layout instanceof HTMLElement)) continue;
-        layout.style.removeProperty("--dcmv-dc-empty-below-height");
+        syncBelowPanelHeight(layout, 0);
       }
     }
   }
@@ -2018,6 +2308,7 @@
     for (const layout of layouts) {
       updateCommentLayoutSize(layout);
     }
+    updateHudBottomOffset();
   }
 
   function getInitialSideCommentWidth() {
@@ -2061,6 +2352,7 @@
       "--dcmv-dc-comment-width",
       `${Math.floor(getInitialSideCommentWidth())}px`
     );
+    layout.style.setProperty("--dcmv-dc-below-panel-height", "1em");
 
     const existingRenderBox =
       imageElement.parentElement instanceof HTMLElement &&
@@ -2080,6 +2372,7 @@
       sourceElement,
       emptyCommentButton
     });
+    setCommentPanelRenderData(panel, comments, titleText);
     const hasOriginalCommentRoot = moveOriginalCommentRoot(originalCommentRoot, panel);
     if (!hasOriginalCommentRoot) {
       panel = createCommentPanel(comments, titleText);
@@ -2111,6 +2404,8 @@
       }
     }
 
+    layout.__dcmvSideCommentPanel = panel;
+    layout.__dcmvBelowCommentPanel = null;
     layout.appendChild(renderBox);
     layout.appendChild(panel);
     bindOriginalCommentPanelInteractions(panel);

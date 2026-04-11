@@ -120,6 +120,11 @@
     syncHudTrigger();
   });
 
+  document.addEventListener("dcmv:dcinside-comment-layout-updated", () => {
+    if (!state?.isDcinsideSite || !state?.showImageComments) return;
+    syncHudTrigger();
+  });
+
   function scheduleDcImageCommentRefresh() {
     setTimeout(() => {
       if (!state?.isDcinsideSite || !state?.showImageComments) return;
