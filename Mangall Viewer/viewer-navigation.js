@@ -3,16 +3,6 @@
 
   modules.navigation = {
     bindEvents(targetState, deps) {
-      const escHandler = (e) => {
-        if (!deps.getState()) return;
-
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          deps.closeViewer();
-        }
-      };
-
       const keydown = (e) => {
         const state = deps.getState();
         if (!state) return;
@@ -37,15 +27,6 @@
         }
 
         deps.goPrev();
-      };
-
-      const keyup = (e) => {
-        if (!deps.getState()) return;
-
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-        }
       };
 
       const wheel = (e) => {
@@ -115,7 +96,9 @@
       };
 
       const fullscreenchange = () => {
-        if (!deps.getState()) return;
+        const state = deps.getState();
+        if (!state) return;
+
         deps.refreshCurrentStepRenderBoxes?.();
         deps.syncHudTrigger();
         deps.syncImageLoadingBarPosition();
@@ -163,6 +146,17 @@
           }
         } else if (action === "refresh") {
           deps.runManualRefresh().catch(() => {});
+        } else if (action === "toggle-fullscreen") {
+          actionEl.blur();
+          if (document.fullscreenElement || document.webkitFullscreenElement) {
+            (document.exitFullscreen || document.webkitExitFullscreen)?.call(document).catch(() => {});
+          } else {
+            const el = document.documentElement;
+            const req = el.requestFullscreen || el.webkitRequestFullscreen;
+            if (typeof req === "function") {
+              req.call(el).catch(() => {});
+            }
+          }
         } else if (action === "toggle-spread") {
           const anchor = deps.getCurrentAnchorIndex();
           state.spreadEnabled = !state.spreadEnabled;
@@ -212,6 +206,12 @@
           actionEl.blur();
           deps.syncToggleVisuals();
           deps.saveSettings({ autoFirstPageAdjust: state.autoFirstPageAdjust });
+        } else if (action === "toggle-corner-counter") {
+          state.showCornerPageCounter = !state.showCornerPageCounter;
+          actionEl.blur();
+          deps.syncToggleVisuals();
+          deps.updateCornerPageCounter?.();
+          deps.saveSettings({ showCornerPageCounter: state.showCornerPageCounter });
         } else if (action === "toggle-auto-fullscreen") {
           state.autoFullscreen = !state.autoFullscreen;
           actionEl.blur();
@@ -234,6 +234,12 @@
             deps.renderCurrentStep();
             deps.syncHudTrigger();
           });
+        } else if (action === "toggle-advanced-settings") {
+          const settingsSlider = state.settingsMenu.querySelector(".dcmv-settings-slider");
+          if (settingsSlider) {
+            settingsSlider.classList.toggle("dcmv-settings-show-advanced");
+          }
+          actionEl.blur();
         } else if (action === "reset-pairing-from-current") {
           const anchor = deps.getCurrentAnchorIndex();
           const resetIndex = Math.max(0, anchor);
@@ -310,8 +316,6 @@
 
       targetState.handlers = {
         keydown,
-        keyup,
-        winKeydown: escHandler,
         wheel,
         mousemove,
         docMouseleave,
@@ -324,8 +328,6 @@
       };
 
       document.addEventListener("keydown", keydown, true);
-      document.addEventListener("keyup", keyup, true);
-      window.addEventListener("keydown", escHandler, true);
       document.addEventListener("mousemove", mousemove, true);
       document.addEventListener("mouseleave", docMouseleave, true);
       window.addEventListener("resize", resize, true);
@@ -443,6 +445,11 @@
       targetState.settingsButton.classList.toggle("dcmv-page-counter-open", nextOpen);
 
       if (nextOpen) {
+        // Reset to basic settings when opening menu
+        const settingsSlider = targetState.settingsMenu.querySelector(".dcmv-settings-slider");
+        if (settingsSlider) {
+          settingsSlider.classList.remove("dcmv-settings-show-advanced");
+        }
         deps.syncManualResetClearVisibility();
         deps.togglePagePicker(false);
         targetState.hud.classList.add(deps.hudVisibleClass);

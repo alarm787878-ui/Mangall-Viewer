@@ -14,7 +14,8 @@ const DEFAULT_SETTINGS = {
   useWasd: true,
   autoFirstPageAdjust: false,
   showImageComments: false,
-  alwaysShowComments: true
+  alwaysShowComments: true,
+  showCornerPageCounter: false
 };
 
 function createContextMenu() {
@@ -74,16 +75,30 @@ async function ensureViewerInjected(tabId, adapter) {
   });
 }
 
-async function openViewerInTab(tabId, targetImageUrl = "") {
-  const tab = await chrome.tabs.get(tabId);
-  const adapter = getCurrentAdapter(tab?.url);
+async function openViewerInTab(tabId, targetImageUrl = "", providedUrl = null) {
+  let url = providedUrl;
+  
+  if (!url) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      url = tab?.url || "";
+    } catch (_) {
+      void chrome.runtime.lastError;
+      url = "";
+    }
+  }
+
+  if (!url) return;
+  
+  const adapter = getCurrentAdapter(url);
   if (!adapter) return;
 
   await ensureViewerInjected(tabId, adapter);
 
   await chrome.tabs.sendMessage(tabId, {
     type: "DCMV_OPEN",
-    targetImageUrl
+    targetImageUrl,
+    source: "toolbar"
   });
 }
 
@@ -115,10 +130,34 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
 
-  const adapter = getCurrentAdapter(tab.url);
+  const url = tab.url || "";
+  const adapter = getCurrentAdapter(url);
   if (!adapter || info.menuItemId !== adapter.menuId) return;
 
-  openViewerInTab(tab.id, info.srcUrl || "").catch(() => {
+  openViewerInTab(tab.id, info.srcUrl || "", url).catch(() => {
     void chrome.runtime.lastError;
   });
 });
+
+chrome.action.onClicked.addListener((tab) => {
+  if (!tab?.id) return;
+
+  const url = tab.url || "";
+  const adapter = getCurrentAdapter(url);
+  if (!adapter) return;
+
+  // 비동기 작업(await)이 시작되기 전에 즉시 executeScript를 쏘아서
+  // 웹페이지 컨텍스트에 5초짜리 "사용자 활성화(User Activation)"를 충전합니다.
+  chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => {
+      // No-op: 이 코드가 실행되면서 웹페이지의 navigator.userActivation.isActive가 true가 됩니다.
+      window.__dcmvActivationCharged = Date.now();
+    }
+  }).catch(() => {});
+
+  openViewerInTab(tab.id, "", url).catch(() => {
+    void chrome.runtime.lastError;
+  });
+});
+

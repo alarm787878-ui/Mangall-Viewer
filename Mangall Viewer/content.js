@@ -20,7 +20,9 @@
     autoFirstPageAdjust: "autoFirstPageAdjust",
     showImageComments: "showImageComments",
     alwaysShowComments: "alwaysShowComments",
-    autoFullscreen: "autoFullscreen"
+    autoFullscreen: "autoFullscreen",
+    forceBelowMode: "forceBelowMode",
+    showCornerPageCounter: "showCornerPageCounter"
   };
 
   const HUD_HIDE_DELAY = 180;
@@ -108,7 +110,15 @@
 
     if (message.type !== "DCMV_OPEN") return;
 
-    openViewer(message).catch(() => {
+    const wasAlreadyFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+
+    // 만약 툴바나 메뉴를 통해 열린 것이라면, 비동기 로직(openViewer)에 진입하기 전에 
+    // 즉시 전체화면을 요청하여 사용자 제스처(Transient Activation) 소실을 방지합니다.
+    // 설정에서 자동 전체화면이 꺼져있을 수도 있지만, 일단 요청한 뒤 openViewer 내부에서 
+    // 설정값에 따라 유지하거나 해제하는 것이 더 확실한 권한 획득 방법입니다.
+    requestViewerDocumentFullscreen();
+
+    openViewer(message, wasAlreadyFullscreen).catch(() => {
       exitViewerDocumentFullscreen();
       showErrorToast(`${VIEWER_DISPLAY_NAME} 실행 중 오류가 발생했습니다.`, 3000);
     });
@@ -134,6 +144,11 @@
   }
 
   function requestViewerDocumentFullscreen() {
+    // API 호출 전 현재 사용자 활성화(User Activation) 상태인지 확인하여 브라우저의 강제 에러 로그 기록 방지
+    if (navigator.userActivation && !navigator.userActivation.isActive) {
+      return;
+    }
+
     const el = document.documentElement;
     const req =
       el.requestFullscreen ||
@@ -170,7 +185,7 @@
     }
   }
 
-  async function openViewer(message = {}) {
+  async function openViewer(message = {}, wasAlreadyFullscreen = false) {
 
     const existing = document.getElementById(OVERLAY_ID);
     if (existing) {
@@ -252,6 +267,12 @@
       settingsAutoFirstPageSwitch: overlay.querySelector(
         ".dcmv-settings-auto-first-page-switch"
       ),
+      settingsCornerCounterButton: overlay.querySelector(
+        ".dcmv-settings-corner-counter"
+      ),
+      settingsCornerCounterSwitch: overlay.querySelector(
+        ".dcmv-settings-corner-counter-switch"
+      ),
       settingsImageCommentsButton: overlay.querySelector(
         ".dcmv-settings-image-comments"
       ),
@@ -262,7 +283,9 @@
         ".dcmv-settings-manual-reset-clear"
       ),
       edgeToast: overlay.querySelector(".dcmv-edge-toast"),
+      cornerPageCounter: overlay.querySelector(".dcmv-corner-page-counter"),
       refreshButton: overlay.querySelector("[data-dcmv-action=\"refresh\"]"),
+      fullscreenButton: overlay.querySelector("[data-dcmv-action=\"toggle-fullscreen\"]"),
       prevButton: overlay.querySelector("[data-dcmv-action=\"prev\"]"),
       nextButton: overlay.querySelector("[data-dcmv-action=\"next\"]"),
 
@@ -299,6 +322,14 @@
         settings.alwaysShowComments === undefined
           ? true
           : !!settings.alwaysShowComments,
+      forceBelowMode:
+        settings.forceBelowMode === undefined
+          ? false
+          : !!settings.forceBelowMode,
+      showCornerPageCounter:
+        settings.showCornerPageCounter === undefined
+          ? false
+          : !!settings.showCornerPageCounter,
       isDcinsideSite: getCurrentSiteAdapter()?.id === "dcinside",
       manualPairingResetIndices: [],
       shouldReuseSavedAutoFirstPageSingle: false,
@@ -327,6 +358,7 @@
       isCursorHidden: false,
       lastPointerX: null,
       lastPointerY: null,
+      wasAlreadyFullscreen: wasAlreadyFullscreen,
       repairTimers: [],
       isRepairRunning: false,
       handlers: {},
@@ -358,6 +390,18 @@
             alwaysShowComments: !!enabled
           });
         });
+        // forceBelowMode 값 전달 및 저장 콜백 설정
+        runtimeModules.dcinsideComments?.setForceBelowMode?.(state.forceBelowMode);
+        runtimeModules.dcinsideComments?.setSaveForceBelowModeCallback?.((enabled) => {
+          state.forceBelowMode = !!enabled;
+          runtimeModules.settings?.saveSettings?.(STORAGE_KEYS, {
+            forceBelowMode: !!enabled
+          });
+        });
+        // 초기 forceBelowMode 적용
+        if (state.forceBelowMode) {
+          runtimeModules.dcinsideComments?.applyForceBelowModeToAllLayouts?.();
+        }
       }
 
     state.firstSingleCheckbox.checked = state.firstPageSingle;
@@ -365,6 +409,8 @@
     // autoFullscreen 설정이 켜져있으면 전체화면 진입
     if (state.autoFullscreen !== false) {
       requestViewerDocumentFullscreen();
+    } else if (!wasAlreadyFullscreen) {
+      exitViewerDocumentFullscreen();
     }
 
     syncToggleVisuals();
@@ -407,7 +453,9 @@
   function closeViewer() {
     if (!state) return;
 
-    exitViewerDocumentFullscreen();
+    if (!state.wasAlreadyFullscreen) {
+      exitViewerDocumentFullscreen();
+    }
 
     const prevState = state;
     if (prevState.isDcinsideSite && prevState.dcImageCommentsWereOriginallyOff) {
@@ -420,8 +468,6 @@
     clearRepairTimers(prevState);
 
     document.removeEventListener("keydown", prevState.handlers.keydown, true);
-    document.removeEventListener("keyup", prevState.handlers.keyup, true);
-    window.removeEventListener("keydown", prevState.handlers.winKeydown, true);
     document.removeEventListener("mousemove", prevState.handlers.mousemove, true);
     document.removeEventListener(
       "mouseleave",
@@ -534,12 +580,14 @@
         autoFirstPageAdjust: state.autoFirstPageAdjust,
         showImageComments: state.showImageComments,
         alwaysShowComments: state.alwaysShowComments,
-        autoFullscreen: state.autoFullscreen
+        autoFullscreen: state.autoFullscreen,
+        forceBelowMode: state.forceBelowMode
       }),
       requestFullscreen: requestViewerDocumentFullscreen,
       exitFullscreen: exitViewerDocumentFullscreen,
       rebuildStepsKeepingAnchor,
       renderCurrentStep,
+      updateCornerPageCounter,
       saveManualPairingResetIndices,
       syncManualResetClearVisibility,
       showEdgeToast,
@@ -1111,6 +1159,31 @@
         globalThis.__dcmvDcinsideComments?.updateAllCommentLayouts?.();
       }
     });
+    updateCornerPageCounter();
+  }
+
+  function updateCornerPageCounter() {
+    if (!state?.cornerPageCounter) return;
+
+    if (!state.showCornerPageCounter) {
+      state.cornerPageCounter.classList.remove("dcmv-corner-counter-visible");
+      return;
+    }
+
+    const step = state.currentStep;
+    const total = state.totalCount || 0;
+    let pageText;
+
+    if (!step?.images?.length) {
+      pageText = `0 / ${total}`;
+    } else if (step.images.length === 1) {
+      pageText = `${step.images[0].displayIndex} / ${total}`;
+    } else {
+      pageText = `${step.images[0].displayIndex}, ${step.images[1].displayIndex} / ${total}`;
+    }
+
+    state.cornerPageCounter.textContent = pageText;
+    state.cornerPageCounter.classList.add("dcmv-corner-counter-visible");
   }
 
   function renderPageCounter(step) {

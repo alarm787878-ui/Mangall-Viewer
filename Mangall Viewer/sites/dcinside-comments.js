@@ -43,6 +43,30 @@
     }
   }
 
+  // 댓글창 below 모드 강제 설정
+  let forceBelowMode = false;
+  let saveForceBelowModeCallback = null;
+
+  function setForceBelowMode(value) {
+    forceBelowMode = !!value;
+    syncForceBelowGlobalClass();
+  }
+
+  function setSaveForceBelowModeCallback(callback) {
+    saveForceBelowModeCallback = callback;
+  }
+
+  function saveForceBelowMode(enabled) {
+    forceBelowMode = !!enabled;
+    if (typeof saveForceBelowModeCallback === "function") {
+      saveForceBelowModeCallback(enabled);
+    }
+  }
+
+  function isForceBelowMode() {
+    return forceBelowMode;
+  }
+
   function isHasCommentsPanel(panel) {
     return (
       panel instanceof HTMLElement &&
@@ -72,6 +96,18 @@
       <path d="M1 12C1 12 5 5 12 5C19 5 23 12 23 12C23 12 19 19 12 19C5 19 1 12 1 12Z" stroke="rgba(255,255,255,0.92)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       <circle cx="12" cy="12" r="3" stroke="rgba(255,255,255,0.92)" stroke-width="1.6"/>
       ${slashLine}
+    </svg>`;
+  }
+
+  function createDownArrowIconSvg() {
+    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;pointer-events:none;">
+      <path d="M12 5v14M5 12l7 7 7-7" stroke="rgba(255,255,255,0.92)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+
+  function createUpArrowIconSvg() {
+    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;pointer-events:none;">
+      <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>`;
   }
 
@@ -325,6 +361,12 @@
     moduleState.collapsedCommentKeys.delete(commentKey);
   }
 
+  function resetViewerCommentUiState() {
+    moduleState.collapsedCommentKeys.clear();
+    moduleState.emptyCommentStates.clear();
+    document.documentElement?.style?.removeProperty?.("--dcmv-hud-bottom-offset");
+  }
+
   function getEmptyCommentState(commentKey) {
     if (!commentKey) return "";
     return moduleState.emptyCommentStates.get(commentKey) || "";
@@ -376,6 +418,7 @@
     const commentRoot = getSourceCommentRoot(panel);
     if (!(commentRoot instanceof HTMLElement)) return false;
 
+    const imageArea = commentRoot.closest(".img_area");
     const trigger = commentRoot.querySelector("li:last-child .cmt_txtbox") || commentRoot;
     if (!(trigger instanceof HTMLElement)) return false;
 
@@ -386,7 +429,10 @@
         trigger.click();
       }
 
-      dispatchCommentRefresh(80);
+      // 고정 타임아웃(80ms) 대신 DOM 변화를 감지한 뒤 refresh하도록 변경.
+      // 디시인사이드의 댓글 로딩이 네트워크 상태나 JS 처리 속도에 따라 느릴 수 있어서
+      // 80ms 안에 DOM 변화가 없으면 두 번째 클릭에서야 펼쳐지는 증상이 발생했었다.
+      refreshCommentsAfterDomMutation(imageArea || commentRoot);
       return true;
     } catch {
       // 디시 원본 더보기 클릭이 실패하면 현재 상태를 그대로 유지한다.
@@ -835,6 +881,15 @@
         return;
       }
 
+      // 아래 화살표 버튼 클릭 (댓글창 아래로) - 전체 적용
+      const downBtn = target.closest(".dcmv-dc-comment-move-down-btn");
+      if (downBtn instanceof HTMLButtonElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        forceBelowAll();
+        return;
+      }
+
       const pagingControl = target.closest(".cmt_paging a, .cmt_paging button");
       if (pagingControl instanceof HTMLAnchorElement || pagingControl instanceof HTMLButtonElement) {
         event.preventDefault();
@@ -938,6 +993,66 @@
         }
         return;
       }
+    });
+  }
+
+  function syncForceBelowGlobalClass() {
+    if (forceBelowMode) {
+      document.body.classList.add("dcmv-force-below-global");
+    } else {
+      document.body.classList.remove("dcmv-force-below-global");
+    }
+  }
+
+  function applyForceBelowModeToAllLayouts() {
+    syncForceBelowGlobalClass();
+    const layouts = document.querySelectorAll(".dcmv-dc-comment-layout");
+    for (const layout of layouts) {
+      if (!(layout instanceof HTMLElement)) continue;
+
+      const { renderBox: imageElement, panel } = getCommentLayoutParts(layout);
+      if (!(imageElement instanceof HTMLElement) || !(panel instanceof HTMLElement)) {
+        continue;
+      }
+
+      if (forceBelowMode) {
+        // below 패널로 전환
+        ensureBelowCommentPanel(layout);
+        layout.dataset.commentPlacement = "below";
+        layout.style.removeProperty("--dcmv-dc-comment-width");
+        layout.style.setProperty(
+          "--dcmv-dc-comment-below-width",
+          `${Math.floor(imageElement.getBoundingClientRect().width)}px`
+        );
+        syncBelowPanelHeight(layout);
+      } else {
+        // side 패널로 복귀
+        ensureSideCommentPanel(layout);
+        layout.dataset.commentPlacement = "side";
+        layout.style.removeProperty("--dcmv-dc-comment-below-width");
+        layout.style.removeProperty("--dcmv-dc-below-panel-height");
+        updateCommentLayoutSize(layout);
+      }
+    }
+    updateHudBottomOffset();
+    notifyCommentLayoutUpdated();
+  }
+
+  function forceBelowAll() {
+    saveForceBelowMode(true);
+    applyForceBelowModeToAllLayouts();
+    // 레이아웃 변경 후 전체 리플로우 트리거
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+  }
+
+  function unforceBelowAll() {
+    saveForceBelowMode(false);
+    applyForceBelowModeToAllLayouts();
+    // 레이아웃 변경 후 전체 리플로우 트리거
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
     });
   }
 
@@ -1679,6 +1794,60 @@
 .dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-action-box {
   display: none;
 }
+/* 아래 화살표 버튼 (action-box 내) */
+.dcmv-dc-comment-move-down-btn {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin-right: 4px;
+}
+
+/* 위 화살표 버튼 (below 패널 우측 하단) */
+.dcmv-dc-comment-move-up-btn {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0);
+  color: rgba(255, 255, 255, 0);
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.2s ease;
+}
+
+.dcmv-dc-comment-move-up-btn:hover {
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 1;
+}
+
+/* below 패널 아무데나 마우스 올리면 화살표 보임 */
+.dcmv-dc-comment-panel-below-preview:hover .dcmv-dc-comment-move-up-btn,
+.dcmv-dc-comment-panel:hover .dcmv-dc-comment-move-up-btn {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* 전역 forceBelowMode가 켜져있을 때만 위 화살표 표시 (사용자가 강제로 아래로 내린 경우에만) */
+.dcmv-force-below-global .dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-move-up-btn {
+  display: flex;
+}
 `;
 
     document.head.appendChild(style);
@@ -1715,8 +1884,17 @@
     const actionBox = document.createElement("div");
     actionBox.className = "dcmv-dc-comment-action-box";
 
-    // 댓글 있는 패널에만 눈 아이콘 추가 (말풍선 버튼 왼쪽)
+    // 댓글 있는 패널에만 아래 화살표 + 눈 아이콘 추가 (말풍선 버튼 왼쪽)
     if (hasComments) {
+      // 아래 화살표 버튼 (댓글창 아래로)
+      const downBtn = document.createElement("button");
+      downBtn.type = "button";
+      downBtn.className = "dcmv-dc-comment-move-down-btn";
+      downBtn.title = "댓글창 아래로 내리기";
+      downBtn.innerHTML = createDownArrowIconSvg();
+      actionBox.appendChild(downBtn);
+
+      // 눈 아이콘 버튼
       const eyeBtn = document.createElement("button");
       eyeBtn.type = "button";
       eyeBtn.className = "dcmv-dc-comment-eye-btn";
@@ -1835,6 +2013,15 @@
     }
 
     panel.appendChild(list);
+
+    // 위 화살표 버튼 (댓글창 위로 - 사용자 강제 below 모드에서만 표시)
+    const upBtn = document.createElement("button");
+    upBtn.type = "button";
+    upBtn.className = "dcmv-dc-comment-move-up-btn";
+    upBtn.title = "댓글창 위로 올리기";
+    upBtn.innerHTML = createUpArrowIconSvg();
+    panel.appendChild(upBtn);
+
     return panel;
   }
 
@@ -1986,7 +2173,25 @@
       layout.__dcmvBelowCommentPanel = belowPanel;
     }
 
-    return replaceLayoutPanel(layout, belowPanel);
+    const finalPanel = replaceLayoutPanel(layout, belowPanel);
+
+    // 위 화살표 버튼 이벤트 핸들러 바인딩 (중복 방지)
+    if (belowPanel instanceof HTMLElement && !belowPanel.dataset.dcmvUpBtnBound) {
+      belowPanel.dataset.dcmvUpBtnBound = "true";
+      belowPanel.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+
+        const upBtn = target.closest(".dcmv-dc-comment-move-up-btn");
+        if (upBtn instanceof HTMLButtonElement) {
+          event.preventDefault();
+          event.stopPropagation();
+          unforceBelowAll();
+        }
+      });
+    }
+
+    return finalPanel;
   }
 
   function getBelowPreviewPanelHeightPx(panel) {
@@ -2120,8 +2325,9 @@
         : "";
   }
 
-  function applyMeasuredCommentPlacement(layout, imageElement, sideMetrics, forceBelow = false) {
-    if (forceBelow || sideMetrics.willClip) {
+  function applyMeasuredCommentPlacement(layout, imageElement, sideMetrics, forceBelow = false, userForcedBelow = false) {
+    // 사용자가 강제로 below 모드로 전환한 경우 side로 돌아가지 않음
+    if (userForcedBelow || forceBelow || sideMetrics.willClip) {
       layout.dataset.commentPlacement = "below";
       layout.style.setProperty("--dcmv-dc-comment-width", `${sideMetrics.width}px`);
       layout.style.setProperty(
@@ -2149,6 +2355,9 @@
       return;
     }
 
+    // 전역 below 모드 강제 설정이 있으면 화면 비율 조정 무시
+    const globalForceBelow = isForceBelowMode();
+
     if (panel.classList.contains("dcmv-dc-comment-panel-empty")) {
       applyEmptyCommentPlacement(layout, imageElement);
       return;
@@ -2157,7 +2366,7 @@
     const sideMetrics =
       options.sideMetricsOverride ||
       measureSingleSideCommentMetrics(layout, imageElement, panel);
-    applyMeasuredCommentPlacement(layout, imageElement, sideMetrics, options.forceBelow);
+    applyMeasuredCommentPlacement(layout, imageElement, sideMetrics, options.forceBelow, globalForceBelow);
   }
 
   function getSideCommentMetrics(layout, imageElement, panel) {
@@ -2226,7 +2435,7 @@
     }
 
     const measurements = [];
-    let shouldForceBelow = false;
+    let shouldForceBelow = isForceBelowMode(); // 전역 설정 먼저 체크
 
     for (const layout of layouts) {
       const { renderBox: imageElement, panel } = getCommentLayoutParts(layout);
@@ -2251,7 +2460,8 @@
         sideMetrics
       });
 
-      if (sideMetrics.willClip) {
+      // 전역 below 모드가 아닌 경우에만 willClip 체크
+      if (!shouldForceBelow && sideMetrics.willClip) {
         shouldForceBelow = true;
       }
     }
@@ -2463,9 +2673,15 @@
     isImageCommentDisabled,
     ensureImageCommentVisibility,
     updateAllCommentLayouts,
+    resetViewerCommentUiState,
     saveAlwaysShowComments,
     setAlwaysShowComments,
-    setSaveAlwaysShowCommentsCallback
+    setSaveAlwaysShowCommentsCallback,
+    saveForceBelowMode,
+    setForceBelowMode,
+    setSaveForceBelowModeCallback,
+    isForceBelowMode,
+    applyForceBelowModeToAllLayouts
   };
   modules.dcinsideComments = globalRoot.__dcmvDcinsideComments;
 })();

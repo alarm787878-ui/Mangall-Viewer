@@ -16,6 +16,11 @@
   cursor: none !important;
 }
 
+#dcmv-overlay ~ * .dcmv-hover-btn,
+.dcmv-overlay ~ * .dcmv-hover-btn {
+  display: none !important;
+}
+
 .dcmv-stage {
   position: absolute;
   inset: 0;
@@ -58,6 +63,8 @@
   justify-content: center;
   gap: 0;
   user-select: none;
+  flex: 0 0 100vw;
+  flex-shrink: 0;
 }
 
 .dcmv-page-single {
@@ -69,8 +76,9 @@
   display: block;
   position: relative;
   flex: 0 0 auto;
-  max-width: 100%;
-  max-height: 100%;
+  max-width: 100vw;
+  max-height: 100vh;
+  box-sizing: border-box;
 }
 
 .dcmv-page-single .dcmv-image,
@@ -79,8 +87,8 @@
   display: block;
   width: 100%;
   height: 100%;
-  max-width: none;
-  max-height: none;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
 }
 
@@ -336,6 +344,24 @@
   width: 100%;
   height: 100%;
   fill: rgba(255, 255, 255, 0.92);
+}
+
+.dcmv-fullscreen-btn {
+  position: relative;
+}
+
+.dcmv-fullscreen-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dcmv-fullscreen-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .dcmv-settings-menu {
@@ -606,4 +632,61 @@
   .dcmv-page-counter {
     font-size: 13px;
   }
+}
+
+/* Settings basic/advanced toggle */
+.dcmv-settings-menu {
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.dcmv-settings-slider {
+  position: relative;
+  width: 100%;
+}
+
+.dcmv-settings-basic,
+.dcmv-settings-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.dcmv-settings-advanced {
+  display: none;
+}
+
+.dcmv-settings-slider.dcmv-settings-show-advanced .dcmv-settings-basic {
+  display: none;
+}
+
+.dcmv-settings-slider.dcmv-settings-show-advanced .dcmv-settings-advanced {
+  display: flex;
+}
+
+/* Corner page counter styles */
+.dcmv-corner-page-counter {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  padding: 6px 10px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.3;
+  pointer-events: none;
+  user-select: none;
+  z-index: 2147483645;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.dcmv-corner-page-counter.dcmv-corner-counter-visible {
+  opacity: 1;
+}
+
+.dcmv-corner-page-counter-hidden {
+  display: none !important;
 }

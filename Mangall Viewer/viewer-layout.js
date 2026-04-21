@@ -3,31 +3,7 @@
   const dcinsideComments = globalThis.__dcmvDcinsideComments || null;
   const MAX_VIEWER_UPSCALE = 1.5;
 
-  function calculateScale(width, height, displayType = "single") {
-    if (!width || !height) return null;
-
-    const availableWidth =
-      displayType === "pair"
-        ? Math.max(0, Math.floor(window.innerWidth / 2) - 4)
-        : Math.max(0, window.innerWidth - 4);
-    const availableHeight = Math.max(0, window.innerHeight - 4);
-    if (!availableWidth || !availableHeight) {
-      return null;
-    }
-
-    const scale = Math.min(
-      MAX_VIEWER_UPSCALE,
-      availableWidth / width,
-      availableHeight / height
-    );
-    if (!Number.isFinite(scale) || scale <= 0) {
-      return null;
-    }
-
-    return scale;
-  }
-
-  function sizeViewerRenderBox(renderBox, item, displayType = "single", heightScale = null) {
+  function sizeViewerRenderBox(renderBox, item, displayType = "single") {
     if (!(renderBox instanceof HTMLElement)) {
       return;
     }
@@ -37,8 +13,9 @@
       return;
     }
 
-    const width = imageElement.naturalWidth;
-    const height = imageElement.naturalHeight;
+    // naturalWidth 우선, 없으면 item 메타데이터로 사전 크기 계산 (opacity 없이 즉시 크기 확정)
+    const width = imageElement.naturalWidth || item?.width || 0;
+    const height = imageElement.naturalHeight || item?.height || 0;
 
     if (!width || !height) {
       renderBox.style.removeProperty("width");
@@ -46,17 +23,21 @@
       return;
     }
 
-    // heightScale이 있으면 높이 맞춤 모드 (너비는 비율대로)
-    if (heightScale !== null && heightScale > 0) {
-      renderBox.style.width = `${Math.max(0.1, width * heightScale)}px`;
-      renderBox.style.height = `${Math.max(0.1, height * heightScale)}px`;
+    const availableWidth =
+      displayType === "pair"
+        ? Math.max(0, Math.floor(window.innerWidth / 2) - 4)
+        : Math.max(0, window.innerWidth - 4);
+    const availableHeight = Math.max(0, window.innerHeight - 4);
+    if (!availableWidth || !availableHeight) {
       return;
     }
 
-    const scale = calculateScale(width, height, displayType);
-    if (scale === null || scale <= 0) {
-      renderBox.style.removeProperty("width");
-      renderBox.style.removeProperty("height");
+    const scale = Math.min(
+      MAX_VIEWER_UPSCALE,
+      availableWidth / width,
+      availableHeight / height
+    );
+    if (!Number.isFinite(scale) || scale <= 0) {
       return;
     }
 
@@ -198,8 +179,8 @@
 
       const resetIndices = Array.isArray(targetState?.manualPairingResetIndices)
         ? targetState.manualPairingResetIndices
-            .filter((index) => Number.isInteger(index) && index >= 0)
-            .sort((a, b) => a - b)
+          .filter((index) => Number.isInteger(index) && index >= 0)
+          .sort((a, b) => a - b)
         : [];
 
       if (!resetIndices.length) {
@@ -321,7 +302,8 @@
         return;
       }
 
-      targetState.stage.replaceChildren();
+      // 이전 콘텐츠 참조 보존
+      const oldWrap = targetState.stage.querySelector(".dcmv-page-wrap");
 
       const wrap = document.createElement("div");
       wrap.className = `dcmv-page-wrap ${
@@ -347,32 +329,29 @@
         });
       };
 
-      // 양면 페이지일 때 높이 맞춤 (height 우선 + 가로 보정)
-      let pairScale = null;
-      if (step.displayType === "pair" && renderImages.length === 2) {
-        const itemA = renderImages[0];
-        const itemB = renderImages[1];
-        if (itemA?.height && itemB?.height && itemA?.width && itemB?.width) {
-          // 1. height 기준으로 scale 계산 (작은 높이 기준)
-          const baseHeight = Math.min(itemA.height, itemB.height);
-          const availableHeight = Math.max(0, window.innerHeight - 4);
-          let scale = Math.min(
-            MAX_VIEWER_UPSCALE,
-            availableHeight / baseHeight
-          );
+      let imagesToLoad = 0;
+      let imagesLoaded = 0;
 
-          // 2. 가로 합계가 화면 넘치면 전체 축소
-          const availableWidth = Math.max(0, window.innerWidth - 4);
-          const scaledWidthA = itemA.width * (baseHeight / itemA.height) * scale;
-          const scaledWidthB = itemB.width * (baseHeight / itemB.height) * scale;
-          const totalWidth = scaledWidthA + scaledWidthB;
-          if (totalWidth > availableWidth) {
-            scale *= availableWidth / totalWidth;
+      const swapContent = () => {
+        imagesLoaded += 1;
+        if (imagesLoaded >= imagesToLoad) {
+          // 모든 이미지 준비 완료, 즉시 교체 및 표시
+          if (oldWrap) {
+            oldWrap.remove();
           }
-
-          pairScale = scale;
+          
+          // Flexbox 흐름에 다시 참여하기 위해 absolute 속성 제거
+          wrap.style.removeProperty("position");
+          wrap.style.removeProperty("inset");
+          
+          // 위치 및 크기 확립을 위해 화면에 보이기 직전에 동기식으로 한 번 더 강제 레이아웃 갱신
+          if (typeof deps.refreshViewerStepLayout === "function") {
+            deps.refreshViewerStepLayout();
+          }
+          
+          wrap.style.visibility = "visible";
         }
-      }
+      };
 
       for (let renderIndex = 0; renderIndex < renderImages.length; renderIndex += 1) {
         const item = renderImages[renderIndex];
@@ -382,8 +361,6 @@
               ? "left"
               : "right"
             : "single";
-        // 양면 페이지 높이 맞춤 scale 계산 (pairScale 사용)
-        const heightScale = (pairScale && item?.height) ? (pairScale * Math.min(renderImages[0]?.height, renderImages[1]?.height)) / item.height : null;
 
         if (item.failed) {
           const failedBox = document.createElement("div");
@@ -400,6 +377,8 @@
           wrap.appendChild(failedBox);
           continue;
         }
+
+        imagesToLoad += 1;
 
         const img = document.createElement("img");
         img.className = "dcmv-image";
@@ -421,6 +400,7 @@
             logFirstViewerImageLoad();
             deps.syncImageLoadingBarPosition();
             scheduleStepLayoutRefresh();
+            swapContent();
           });
         } else {
           img.addEventListener(
@@ -429,9 +409,11 @@
               logFirstViewerImageLoad();
               deps.syncImageLoadingBarPosition();
               scheduleStepLayoutRefresh();
+              swapContent();
             },
             { once: true }
           );
+          img.addEventListener("error", swapContent, { once: true });
         }
 
         if (item.resolvedSrc && item.src && item.resolvedSrc !== item.src) {
@@ -462,13 +444,42 @@
             item,
             pagePosition,
             targetState,
-            displayType: step.displayType,
-            heightScale
+            displayType: step.displayType
           })
         );
       }
 
+      // visibility:hidden 상태일 때 flex 레이아웃으로 인해 oldWrap이 찌그러지는 현상 방지
+      // Stage가 Flex 컨테이너이므로, 새 wrap을 append하기 전에 absolute로 만들어 흐름에서 제외함
+      if (oldWrap) {
+        wrap.style.position = "absolute";
+        wrap.style.inset = "0";
+        wrap.style.zIndex = "10"; // 이전 페이지 위에 확실히 오버레이
+      }
+
+      // 초기에는 보이지 않게 설정 (위치/크기 확정 후 표시)
+      wrap.style.visibility = "hidden";
+
+      // 새 콘텐츠를 stage에 추가 (이전 콘텐츠 위에 오버레이 혹은 stage의 첫 자식으로 추가)
       targetState.stage.appendChild(wrap);
+
+      // 이미지가 이미 모두 준비되어 있거나 로딩할 이미지가 없는 경우 즉시 교체
+      if (imagesToLoad === 0 || imagesLoaded >= imagesToLoad) {
+        if (oldWrap) {
+          oldWrap.remove();
+        }
+        
+        wrap.style.removeProperty("position");
+        wrap.style.removeProperty("inset");
+        wrap.style.removeProperty("z-index");
+        
+        if (typeof deps.refreshViewerStepLayout === "function") {
+          deps.refreshViewerStepLayout();
+        }
+        
+        wrap.style.visibility = "visible";
+      }
+
       deps.renderPageCounter(step);
       deps.syncManualResetClearVisibility();
       deps.syncImageLoadingBarPosition();
@@ -569,49 +580,19 @@
     refreshCurrentStepRenderBoxes(targetState) {
       if (!targetState?.stage || !targetState?.currentStep?.images?.length) return;
 
-      const renderBoxes = Array.from(targetState.stage.querySelectorAll(".dcmv-image-render-box"));
-      const displayType = targetState.currentStep.displayType || "single";
-
-      // 양면 페이지일 때 pairScale 계산
-      let pairScale = null;
-      let baseHeight = null;
-      if (displayType === "pair" && renderBoxes.length === 2) {
-        const items = renderBoxes
-          .map((box) => {
-            const idx = Number(box.dataset.dcmvImageIndex);
-            return targetState.currentStep.images.find((entry) => entry.index === idx);
-          })
-          .filter(Boolean);
-        if (items.length === 2 && items[0]?.height && items[1]?.height && items[0]?.width && items[1]?.width) {
-          const itemA = items[0];
-          const itemB = items[1];
-          baseHeight = Math.min(itemA.height, itemB.height);
-          const availableHeight = Math.max(0, window.innerHeight - 4);
-          let scale = Math.min(MAX_VIEWER_UPSCALE, availableHeight / baseHeight);
-          const availableWidth = Math.max(0, window.innerWidth - 4);
-          const scaledWidthA = itemA.width * (baseHeight / itemA.height) * scale;
-          const scaledWidthB = itemB.width * (baseHeight / itemB.height) * scale;
-          const totalWidth = scaledWidthA + scaledWidthB;
-          if (totalWidth > availableWidth) {
-            scale *= availableWidth / totalWidth;
-          }
-          pairScale = scale;
-        }
-      }
-
+      const renderBoxes = targetState.stage.querySelectorAll(".dcmv-image-render-box");
       for (const renderBox of renderBoxes) {
         if (!(renderBox instanceof HTMLElement)) continue;
         const itemIndex = Number(renderBox.dataset.dcmvImageIndex);
         if (!Number.isInteger(itemIndex)) continue;
         const item = targetState.currentStep.images.find((entry) => entry.index === itemIndex);
         if (!item) continue;
-        const heightScale = (pairScale && baseHeight && item?.height) ? (pairScale * baseHeight) / item.height : null;
-        sizeViewerRenderBox(renderBox, item, renderBox.dataset.dcmvDisplayType || displayType, heightScale);
+        sizeViewerRenderBox(renderBox, item, renderBox.dataset.dcmvDisplayType || targetState.currentStep.displayType || "single");
       }
     }
   };
 
-  function buildViewerRenderBox(imageElement, item, displayType = "single", heightScale = null) {
+  function buildViewerRenderBox(imageElement, item, displayType = "single") {
     if (!(imageElement instanceof HTMLElement)) {
       return imageElement;
     }
@@ -622,46 +603,47 @@
     renderBox.dataset.dcmvDisplayType = displayType;
     renderBox.appendChild(imageElement);
 
-    sizeViewerRenderBox(renderBox, item, displayType, heightScale);
+    // item.width/height 메타데이터로 즉시 사전 크기 계산 → opacity 관리 불필요
+    sizeViewerRenderBox(renderBox, item, displayType);
     return renderBox;
   }
 
   function wrapViewerImageWithComments(options = {}) {
-    const { imageElement, item, pagePosition, targetState, displayType = "single", heightScale = null } = options;
+    const { imageElement, item, pagePosition, targetState, displayType = "single" } = options;
 
     if (!(imageElement instanceof HTMLElement)) {
       return imageElement;
     }
 
-    const renderBox = buildViewerRenderBox(imageElement, item, displayType, heightScale);
+    const renderBox = buildViewerRenderBox(imageElement, item, displayType);
 
     if (!targetState?.isDcinsideSite || !targetState?.showImageComments || !dcinsideComments) {
       return renderBox;
     }
 
-      const isCollapsed =
-        dcinsideComments.isCommentCollapsedForSource?.(item?.element) || false;
-      const comments = isCollapsed
-        ? []
-        : dcinsideComments.collectImageCommentsForSourceItem?.(item?.element);
-      const originalCommentRoot = dcinsideComments.findOriginalCommentRoot?.(item?.element) || null;
-      const emptyCommentButton =
-        dcinsideComments.findEmptyCommentOpenButton?.(item?.element) || null;
-      const commentKey = dcinsideComments.getCommentSourceKey?.(item?.element) || "";
-      const hasComments = Array.isArray(comments) && comments.length > 0;
+    const isCollapsed =
+      dcinsideComments.isCommentCollapsedForSource?.(item?.element) || false;
+    const comments = isCollapsed
+      ? []
+      : dcinsideComments.collectImageCommentsForSourceItem?.(item?.element);
+    const originalCommentRoot = dcinsideComments.findOriginalCommentRoot?.(item?.element) || null;
+    const emptyCommentButton =
+      dcinsideComments.findEmptyCommentOpenButton?.(item?.element) || null;
+    const commentKey = dcinsideComments.getCommentSourceKey?.(item?.element) || "";
+    const hasComments = Array.isArray(comments) && comments.length > 0;
 
-      const side = dcinsideComments.getCommentSide?.({ pagePosition }) || "right";
-      return (
-        dcinsideComments.wrapImageWithComments?.({
-          imageElement,
-          sourceElement: item?.element || null,
-          comments: hasComments ? comments : [],
-          side,
-          titleText: `이미지 댓글 ${hasComments ? comments.length : 0}개`,
-          originalCommentRoot,
-          emptyCommentButton,
-          commentKey
-        }) || renderBox
-      );
+    const side = dcinsideComments.getCommentSide?.({ pagePosition }) || "right";
+    return (
+      dcinsideComments.wrapImageWithComments?.({
+        imageElement,
+        sourceElement: item?.element || null,
+        comments: hasComments ? comments : [],
+        side,
+        titleText: `이미지 댓글 ${hasComments ? comments.length : 0}개`,
+        originalCommentRoot,
+        emptyCommentButton,
+        commentKey
+      }) || renderBox
+    );
   }
 })();

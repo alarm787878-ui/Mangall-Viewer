@@ -8,7 +8,9 @@
     autoFirstPageAdjust: false,
     showImageComments: false,
     alwaysShowComments: true,
-    autoFullscreen: true
+    autoFullscreen: true,
+    forceBelowMode: false,
+    showCornerPageCounter: false
   };
   const SETTING_FIELDS = [
     "readingDirectionRTL",
@@ -18,7 +20,9 @@
     "autoFirstPageAdjust",
     "showImageComments",
     "alwaysShowComments",
-    "autoFullscreen"
+    "autoFullscreen",
+    "forceBelowMode",
+    "showCornerPageCounter"
   ];
 
   modules.settings = {
@@ -51,7 +55,9 @@
             storageKeys.autoFirstPageAdjust,
             storageKeys.showImageComments,
             storageKeys.alwaysShowComments,
-            storageKeys.autoFullscreen
+            storageKeys.autoFullscreen,
+            storageKeys.forceBelowMode,
+            storageKeys.showCornerPageCounter
           ],
           (result) => {
             const nextSettings = {};
@@ -162,10 +168,23 @@
         deps.toggleActiveClass,
         targetState.autoFirstPageAdjust
       );
-      targetState.settingsAutoFirstPageButton.setAttribute(
+      targetState.settingsAutoFirstPageButton?.setAttribute(
         "aria-pressed",
         targetState.autoFirstPageAdjust ? "true" : "false"
       );
+      if (targetState.settingsCornerCounterButton) {
+        targetState.settingsCornerCounterButton.querySelector(
+          ".dcmv-settings-item-label"
+        ).textContent = "페이지 수 항상 표시";
+        targetState.settingsCornerCounterButton.classList.toggle(
+          deps.toggleActiveClass,
+          !!targetState.showCornerPageCounter
+        );
+        targetState.settingsCornerCounterButton.setAttribute(
+          "aria-pressed",
+          targetState.showCornerPageCounter ? "true" : "false"
+        );
+      }
       targetState.settingsAutoFullscreenButton?.classList.toggle(
         deps.toggleActiveClass,
         targetState.autoFullscreen !== false
