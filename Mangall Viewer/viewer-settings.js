@@ -8,7 +8,7 @@
     autoFirstPageAdjust: false,
     showImageComments: false,
     alwaysShowComments: true,
-    autoFullscreen: true,
+    autoFullscreen: false,
     forceBelowMode: false,
     showCornerPageCounter: false
   };
