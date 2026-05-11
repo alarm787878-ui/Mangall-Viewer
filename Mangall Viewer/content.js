@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   if (window.__dcmvContentScriptLoaded) {
     return;
   }
@@ -68,9 +68,27 @@
   const siteRegistry = globalThis.__dcmvSiteRegistry || {};
   const VIEWER_DISPLAY_NAME = "만갤 뷰어";
   const CONTENT_INSTANCE_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let customAdaptersReadyPromise = null;
 
   function getCurrentSiteAdapter() {
     return siteRegistry.getSiteAdapterForUrl?.(location.href) || null;
+  }
+
+  async function ensureCustomAdaptersLoaded() {
+    if (!runtimeModules.universalSiteSettings?.loadAndRegisterCustomAdapters) {
+      return;
+    }
+
+    if (!customAdaptersReadyPromise) {
+      customAdaptersReadyPromise =
+        runtimeModules.universalSiteSettings.loadAndRegisterCustomAdapters();
+    }
+
+    try {
+      await customAdaptersReadyPromise;
+    } catch {
+      customAdaptersReadyPromise = null;
+    }
   }
 
   function callSiteAdapter(methodName, ...args) {
@@ -186,6 +204,7 @@
   }
 
   async function openViewer(message = {}, wasAlreadyFullscreen = false) {
+    await ensureCustomAdaptersLoaded();
 
     const existing = document.getElementById(OVERLAY_ID);
     if (existing) {
@@ -201,7 +220,7 @@
       : {};
 
     const sourceItems = runtimeModules.pageLoading?.collectSourceItems
-      ? runtimeModules.pageLoading.collectSourceItems(root, {
+      ? await runtimeModules.pageLoading.collectSourceItems(root, {
           isInsideExcludedImageCommentArea: (el) =>
             runtimeModules.pageLoading?.isInsideExcludedImageCommentArea
               ? runtimeModules.pageLoading.isInsideExcludedImageCommentArea(el)
@@ -450,10 +469,14 @@
     scheduleCursorHide();
   }
 
-  function closeViewer() {
+  function closeViewer(options = {}) {
     if (!state) return;
 
-    if (!state.wasAlreadyFullscreen) {
+    const shouldPreserveFullscreen = !!options.preserveFullscreen;
+    const shouldRestorePageScroll = options.restorePageScroll !== false;
+    const shouldSavePosition = options.savePosition !== false;
+
+    if (!shouldPreserveFullscreen && !state.wasAlreadyFullscreen) {
       exitViewerDocumentFullscreen();
     }
 
@@ -461,7 +484,9 @@
     if (prevState.isDcinsideSite && prevState.dcImageCommentsWereOriginallyOff) {
       runtimeModules.dcinsideComments?.ensureImageCommentVisibility?.(false);
     }
-    saveLastReadPosition(prevState);
+    if (shouldSavePosition) {
+      saveLastReadPosition(prevState);
+    }
     clearTimeout(prevState.hudHideTimer);
     clearTimeout(prevState.cursorHideTimer);
     clearTimeout(prevState.edgeToastTimer);
@@ -499,6 +524,10 @@
     document.body.classList.remove(LOCK_CLASS);
 
     state = null;
+
+    if (!shouldRestorePageScroll) {
+      return;
+    }
 
     requestAnimationFrame(() => {
       const root = prevState.root || document.body;
@@ -601,6 +630,37 @@
   function setRefreshButtonState(isRunning) {
     if (runtimeModules.ui?.setRefreshButtonState) {
       runtimeModules.ui.setRefreshButtonState(state, isRunning);
+    }
+  }
+
+  async function restartViewerSoftly() {
+    if (!state || state.isManualRefreshRunning) return;
+
+    const previousState = state;
+    const anchorItem = getPrimaryAnchorItem(previousState);
+    const targetImageUrl =
+      anchorItem?.originalPopUrl || anchorItem?.resolvedSrc || anchorItem?.src || "";
+    const wasAlreadyFullscreen = previousState.wasAlreadyFullscreen;
+
+    previousState.isManualRefreshRunning = true;
+    setRefreshButtonState(true);
+
+    try {
+      await wakeLazyImages(previousState.root);
+      saveLastReadPosition(previousState);
+      closeViewer({
+        preserveFullscreen: true,
+        restorePageScroll: false,
+        savePosition: false
+      });
+      await openViewer({ targetImageUrl }, wasAlreadyFullscreen);
+      showEdgeToast("새로고침 완료", 1200);
+    } catch {
+      if (state === previousState) {
+        previousState.isManualRefreshRunning = false;
+        setRefreshButtonState(false);
+      }
+      showErrorToast(`${VIEWER_DISPLAY_NAME} 새로고침 중 오류가 발생했습니다.`, 3000);
     }
   }
 
@@ -1040,8 +1100,8 @@
     }) ?? false;
   }
 
-  function syncKnownDimensionsFromDom() {
-    runtimeModules.pageLoading?.syncKnownDimensionsFromDom?.(state, {
+  async function syncKnownDimensionsFromDom() {
+    await runtimeModules.pageLoading?.syncKnownDimensionsFromDom?.(state, {
       refreshSourceItemsFromDom
     });
   }
@@ -1478,32 +1538,34 @@
     }, 500);
   }
 
-  function refreshSourceItemsFromDom() {
-    return runtimeModules.pageLoading?.refreshSourceItemsFromDom
-      ? runtimeModules.pageLoading.refreshSourceItemsFromDom(state, {
-          getStableItemKey,
-          collectSourceItems: (root) =>
-            runtimeModules.pageLoading?.collectSourceItems
-              ? runtimeModules.pageLoading.collectSourceItems(root, {
-                  isInsideExcludedImageCommentArea: (el) =>
-                    runtimeModules.pageLoading?.isInsideExcludedImageCommentArea
-                      ? runtimeModules.pageLoading.isInsideExcludedImageCommentArea(el)
-                      : false,
-                  isExcludedInlineDcconImage: (el) =>
-                    runtimeModules.pageLoading?.isExcludedInlineDcconImage
-                      ? runtimeModules.pageLoading.isExcludedInlineDcconImage(el)
-                      : false,
-                  isInsideOpenGraphPreview: (el) =>
-                    runtimeModules.pageLoading?.isInsideOpenGraphPreview
-                      ? runtimeModules.pageLoading.isInsideOpenGraphPreview(el)
-                      : false,
-                  parseOriginalPopUrlFromTag,
-                  resolveImageUrlFromTag,
-                  decodeHtml
-                })
-              : []
-        })
-      : { nextSourceItems: [], countChanged: false };
+  async function refreshSourceItemsFromDom() {
+    if (!runtimeModules.pageLoading?.refreshSourceItemsFromDom) {
+      return { nextSourceItems: [], countChanged: false };
+    }
+
+    return await runtimeModules.pageLoading.refreshSourceItemsFromDom(state, {
+      getStableItemKey,
+      collectSourceItems: async (root) => {
+        if (!runtimeModules.pageLoading?.collectSourceItems) return [];
+        return await runtimeModules.pageLoading.collectSourceItems(root, {
+          isInsideExcludedImageCommentArea: (el) =>
+            runtimeModules.pageLoading?.isInsideExcludedImageCommentArea
+              ? runtimeModules.pageLoading.isInsideExcludedImageCommentArea(el)
+              : false,
+          isExcludedInlineDcconImage: (el) =>
+            runtimeModules.pageLoading?.isExcludedInlineDcconImage
+              ? runtimeModules.pageLoading.isExcludedInlineDcconImage(el)
+              : false,
+          isInsideOpenGraphPreview: (el) =>
+            runtimeModules.pageLoading?.isInsideOpenGraphPreview
+              ? runtimeModules.pageLoading.isInsideOpenGraphPreview(el)
+              : false,
+          parseOriginalPopUrlFromTag,
+          resolveImageUrlFromTag,
+          decodeHtml
+        });
+      }
+    });
   }
 
   function applyRefreshedSourceItems(nextSourceItems) {
@@ -1621,25 +1683,7 @@
     });
   }
   async function runManualRefresh() {
-    await runtimeModules.pageLoading?.runManualRefresh?.(state, {
-      getState: () => state,
-      clearSavedManualPairingResetIndices,
-      setRefreshButtonState,
-      getCurrentAnchorIndex,
-      getCurrentStepRenderUrls,
-      wakeLazyImages,
-      refreshSourceItemsFromDom,
-      applyRefreshedSourceItems,
-      hydrateImageMetadata,
-      retryMissingItems,
-      applyRebuiltLayoutIfChanged,
-      rebuildStepsKeepingAnchor,
-      didCurrentStepRenderUrlsChange,
-      syncCurrentStepImagesFromSourceItems,
-      renderCurrentStep,
-      syncHudTrigger,
-      showEdgeToast
-    });
+    await restartViewerSoftly();
   }
   // 뷰어에서 디시 이미지를 누락 없이 수집할 수 있도록, 지연 로딩된 본문 이미지를 한 번 깨우는 용도.
   // 페이지 스크롤을 아래로 훑으며 src가 비어 있는 이미지를 채운 뒤 원래 스크롤 위치로 복원한다.
@@ -1679,4 +1723,8 @@
       : null;
   }
 
+  // 커스텀 사이트 어댑터를 미리 등록해두면 툴바/팝업 실행 흐름이 더 안정적이다.
+  ensureCustomAdaptersLoaded().catch(() => {});
+
 })();
+

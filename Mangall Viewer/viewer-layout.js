@@ -302,8 +302,11 @@
         return;
       }
 
-      // 이전 콘텐츠 참조 보존
-      const oldWrap = targetState.stage.querySelector(".dcmv-page-wrap");
+      targetState.renderSeq = (targetState.renderSeq || 0) + 1;
+      const renderSeq = targetState.renderSeq;
+      const oldWraps = Array.from(
+        targetState.stage.querySelectorAll(":scope > .dcmv-page-wrap")
+      );
 
       const wrap = document.createElement("div");
       wrap.className = `dcmv-page-wrap ${
@@ -332,24 +335,38 @@
       let imagesToLoad = 0;
       let imagesLoaded = 0;
 
+      const isLatestRender = () =>
+        targetState.renderSeq === renderSeq && wrap.isConnected;
+
+      const removeOtherPageWraps = () => {
+        const wraps = targetState.stage.querySelectorAll(":scope > .dcmv-page-wrap");
+        for (const pageWrap of wraps) {
+          if (pageWrap !== wrap) {
+            pageWrap.remove();
+          }
+        }
+      };
+
+      const showPreparedWrap = () => {
+        if (!isLatestRender()) return;
+
+        wrap.style.removeProperty("position");
+        wrap.style.removeProperty("inset");
+        wrap.style.removeProperty("z-index");
+
+        if (typeof deps.refreshViewerStepLayout === "function") {
+          deps.refreshViewerStepLayout();
+        }
+
+        wrap.style.visibility = "visible";
+        removeOtherPageWraps();
+      };
+
       const swapContent = () => {
+        if (!isLatestRender()) return;
         imagesLoaded += 1;
         if (imagesLoaded >= imagesToLoad) {
-          // 모든 이미지 준비 완료, 즉시 교체 및 표시
-          if (oldWrap) {
-            oldWrap.remove();
-          }
-          
-          // Flexbox 흐름에 다시 참여하기 위해 absolute 속성 제거
-          wrap.style.removeProperty("position");
-          wrap.style.removeProperty("inset");
-          
-          // 위치 및 크기 확립을 위해 화면에 보이기 직전에 동기식으로 한 번 더 강제 레이아웃 갱신
-          if (typeof deps.refreshViewerStepLayout === "function") {
-            deps.refreshViewerStepLayout();
-          }
-          
-          wrap.style.visibility = "visible";
+          showPreparedWrap();
         }
       };
 
@@ -451,10 +468,10 @@
 
       // visibility:hidden 상태일 때 flex 레이아웃으로 인해 oldWrap이 찌그러지는 현상 방지
       // Stage가 Flex 컨테이너이므로, 새 wrap을 append하기 전에 absolute로 만들어 흐름에서 제외함
-      if (oldWrap) {
-        wrap.style.position = "absolute";
-        wrap.style.inset = "0";
-        wrap.style.zIndex = "10"; // 이전 페이지 위에 확실히 오버레이
+        if (oldWraps.length) {
+          wrap.style.position = "absolute";
+          wrap.style.inset = "0";
+          wrap.style.zIndex = "10"; // 이전 페이지 위에 확실히 오버레이
       }
 
       // 초기에는 보이지 않게 설정 (위치/크기 확정 후 표시)
@@ -465,19 +482,7 @@
 
       // 이미지가 이미 모두 준비되어 있거나 로딩할 이미지가 없는 경우 즉시 교체
       if (imagesToLoad === 0 || imagesLoaded >= imagesToLoad) {
-        if (oldWrap) {
-          oldWrap.remove();
-        }
-        
-        wrap.style.removeProperty("position");
-        wrap.style.removeProperty("inset");
-        wrap.style.removeProperty("z-index");
-        
-        if (typeof deps.refreshViewerStepLayout === "function") {
-          deps.refreshViewerStepLayout();
-        }
-        
-        wrap.style.visibility = "visible";
+        showPreparedWrap();
       }
 
       deps.renderPageCounter(step);

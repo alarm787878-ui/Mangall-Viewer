@@ -1,5 +1,6 @@
-importScripts(
+﻿importScripts(
   "site-registry.js",
+  "sites/universal-site-settings.js",
   "sites/arca-live.js",
   "sites/blogspot.js",
   "sites/fc2.js",
@@ -18,6 +19,18 @@ const DEFAULT_SETTINGS = {
   showCornerPageCounter: false
 };
 
+async function syncSiteRegistry() {
+  const universalSettings = globalThis.__dcmvModules?.universalSiteSettings;
+  if (universalSettings?.loadAndRegisterCustomAdapters) {
+    await universalSettings.loadAndRegisterCustomAdapters();
+  }
+}
+
+async function syncSiteRegistryAndMenus() {
+  await syncSiteRegistry();
+  createContextMenu();
+}
+
 function createContextMenu() {
   chrome.contextMenus.removeAll(() => {
     const adapters = globalThis.__dcmvSiteRegistry?.listSiteAdapters?.() || [];
@@ -26,12 +39,20 @@ function createContextMenu() {
         continue;
       }
 
-      chrome.contextMenus.create({
-        id: adapter.menuId,
-        title: adapter.menuTitle || adapter.name || "DC Viewer",
-        contexts: ["page", "image"],
-        documentUrlPatterns: adapter.documentUrlPatterns
-      });
+      if (!adapter.documentUrlPatterns.length) {
+        continue;
+      }
+
+      try {
+        chrome.contextMenus.create({
+          id: adapter.menuId,
+          title: adapter.menuTitle || adapter.name || "DC Viewer",
+          contexts: ["page", "image"],
+          documentUrlPatterns: adapter.documentUrlPatterns
+        });
+      } catch (_) {
+        void chrome.runtime.lastError;
+      }
     }
   });
 }
@@ -42,6 +63,7 @@ function getCurrentAdapter(url) {
 
 function getSiteScriptFiles(adapter) {
   if (!adapter?.id) return [];
+  if (String(adapter.id).startsWith("custom_")) return [];
 
   const files = [`sites/${adapter.id}.js`];
   if (adapter.id === "dcinside") {
@@ -62,6 +84,7 @@ async function ensureViewerInjected(tabId, adapter) {
     target: { tabId },
     files: [
       "site-registry.js",
+      "sites/universal-site-settings.js",
       ...siteScriptFiles,
       "viewer-common.js",
       "viewer-ui.js",
@@ -76,6 +99,8 @@ async function ensureViewerInjected(tabId, adapter) {
 }
 
 async function openViewerInTab(tabId, targetImageUrl = "", providedUrl = null) {
+  await syncSiteRegistry();
+
   let url = providedUrl;
   
   if (!url) {
@@ -118,12 +143,14 @@ function ensureDefaultSettings() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
   ensureDefaultSettings();
+  await syncSiteRegistry();
   createContextMenu();
 });
 
-chrome.runtime.onStartup.addListener(() => {
+chrome.runtime.onStartup.addListener(async () => {
+  await syncSiteRegistry();
   createContextMenu();
 });
 
@@ -131,20 +158,19 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
 
   const url = tab.url || "";
-  const adapter = getCurrentAdapter(url);
-  if (!adapter || info.menuItemId !== adapter.menuId) return;
-
-  openViewerInTab(tab.id, info.srcUrl || "", url).catch(() => {
-    void chrome.runtime.lastError;
-  });
+  syncSiteRegistry()
+    .then(() => {
+      const adapter = getCurrentAdapter(url);
+      if (!adapter || info.menuItemId !== adapter.menuId) return;
+      return openViewerInTab(tab.id, info.srcUrl || "", url);
+    })
+    .catch(() => {
+      void chrome.runtime.lastError;
+    });
 });
 
 chrome.action.onClicked.addListener((tab) => {
   if (!tab?.id) return;
-
-  const url = tab.url || "";
-  const adapter = getCurrentAdapter(url);
-  if (!adapter) return;
 
   // 비동기 작업(await)이 시작되기 전에 즉시 executeScript를 쏘아서
   // 웹페이지 컨텍스트에 5초짜리 "사용자 활성화(User Activation)"를 충전합니다.
@@ -156,8 +182,26 @@ chrome.action.onClicked.addListener((tab) => {
     }
   }).catch(() => {});
 
-  openViewerInTab(tab.id, "", url).catch(() => {
+  openViewerInTab(tab.id, "", tab.url || "").catch(() => {
     void chrome.runtime.lastError;
   });
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message) return undefined;
+
+  if (message.type === "DCMV_RELOAD_CUSTOM_SITES") {
+    syncSiteRegistryAndMenus()
+      .then(() => sendResponse({ success: true }))
+      .catch((error) =>
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : String(error || "")
+        })
+      );
+    return true;
+  }
+
+  return undefined;
 });
 

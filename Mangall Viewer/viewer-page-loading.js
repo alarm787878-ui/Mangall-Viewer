@@ -15,6 +15,32 @@
     return fallback;
   }
 
+  function compareDocumentOrder(a, b) {
+    if (a === b) return 0;
+    if (!(a instanceof Node) || !(b instanceof Node)) return 0;
+
+    const position = a.compareDocumentPosition(b);
+    if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  }
+
+  function getRootBranchElement(imgEl, root) {
+    if (!(imgEl instanceof Element)) return null;
+    if (!(root instanceof Element)) {
+      return imgEl.parentElement || imgEl;
+    }
+
+    let branch = imgEl;
+    let current = imgEl;
+    while (current && current !== root) {
+      branch = current;
+      current = current.parentElement;
+    }
+
+    return branch;
+  }
+
   modules.pageLoading = {
     findContentRoot() {
       const fallback = () => {
@@ -44,53 +70,71 @@
       return getAdapterMethod("findContentRoot", fallback)();
     },
 
-    collectSourceItems(root, deps) {
-      const collectSourceItems =
-        getCurrentSiteAdapter()?.collectSourceItems ||
-        ((currentRoot, currentDeps) => {
-          const domImages = Array.from(currentRoot.querySelectorAll("img"));
-          const result = [];
-          const seen = new Set();
-
-          for (const imgEl of domImages) {
-            if (this.isInsideExcludedImageCommentArea(imgEl)) continue;
-            if (this.isExcludedInlineDcconImage(imgEl)) continue;
-            if (this.isInsideOpenGraphPreview(imgEl)) continue;
-
-            const originalPopUrl =
-              imgEl.closest("a[href]")?.href ||
-              currentDeps.parseOriginalPopUrlFromTag(imgEl.outerHTML || "");
-            const normalSrc =
-              imgEl.getAttribute("data-original") ||
-              imgEl.getAttribute("data-src") ||
-              imgEl.getAttribute("src") ||
-              currentDeps.resolveImageUrlFromTag(imgEl.outerHTML || "");
-
-            const decodedSrc = currentDeps.decodeHtml(normalSrc || "");
-            const decodedPopUrl = currentDeps.decodeHtml(originalPopUrl || "");
-            const dedupeKey = decodedPopUrl || decodedSrc;
-
-            if (!dedupeKey || seen.has(dedupeKey)) continue;
-            seen.add(dedupeKey);
-
-            result.push({
-              src: decodedSrc || "",
-              originalPopUrl: decodedPopUrl || "",
-              resolvedSrc: "",
-              width: imgEl.naturalWidth || Number(imgEl.getAttribute("width")) || 0,
-              height: imgEl.naturalHeight || Number(imgEl.getAttribute("height")) || 0,
-              alt: imgEl.getAttribute("alt") || "",
-              index: result.length,
-              displayIndex: result.length + 1,
-              element: imgEl,
-              failed: false
-            });
-          }
-
+    async collectSourceItems(root, deps) {
+      const adapter = getCurrentSiteAdapter();
+      if (adapter?.collectSourceItems) {
+        const result = await adapter.collectSourceItems(root, deps);
+        if (Array.isArray(result) && result.length > 0) {
           return result;
-        });
+        }
+      }
 
-      return collectSourceItems.call(this, root, deps);
+      // 폴백: 기본 img 태그 수집
+      const domImages = Array.from(root.querySelectorAll("img")).sort(compareDocumentOrder);
+      const blockOrder = [];
+      const blockMap = new Map();
+
+      for (const imgEl of domImages) {
+        if (this.isInsideExcludedImageCommentArea(imgEl)) continue;
+        if (this.isExcludedInlineDcconImage(imgEl)) continue;
+        if (this.isInsideOpenGraphPreview(imgEl)) continue;
+
+        const originalPopUrl =
+          imgEl.closest("a[href]")?.href ||
+          deps.parseOriginalPopUrlFromTag(imgEl.outerHTML || "");
+        const normalSrc =
+          imgEl.getAttribute("data-original") ||
+          imgEl.getAttribute("data-src") ||
+          imgEl.getAttribute("src") ||
+          deps.resolveImageUrlFromTag(imgEl.outerHTML || "");
+
+        const decodedSrc = deps.decodeHtml(normalSrc || "");
+        const decodedPopUrl = deps.decodeHtml(originalPopUrl || "");
+        const itemKey = decodedPopUrl || decodedSrc;
+
+        if (!itemKey) continue;
+
+        const blockEl = getRootBranchElement(imgEl, root);
+        const blockKey = blockEl || imgEl;
+        if (!blockMap.has(blockKey)) {
+          blockMap.set(blockKey, []);
+          blockOrder.push(blockKey);
+        }
+        blockMap.get(blockKey).push({
+          src: decodedSrc || "",
+          originalPopUrl: decodedPopUrl || "",
+          resolvedSrc: "",
+          width: imgEl.naturalWidth || Number(imgEl.getAttribute("width")) || 0,
+          height: imgEl.naturalHeight || Number(imgEl.getAttribute("height")) || 0,
+          alt: imgEl.getAttribute("alt") || "",
+          element: imgEl,
+          failed: false
+        });
+      }
+
+      const result = [];
+      for (const blockKey of blockOrder) {
+        const items = blockMap.get(blockKey) || [];
+        for (const item of items) {
+          result.push({
+            ...item,
+            index: result.length,
+            displayIndex: result.length + 1
+          });
+        }
+      }
+
+      return result;
     },
 
     isInsideExcludedImageCommentArea(el) {
@@ -353,9 +397,15 @@
       return Math.max(0, Math.round(y));
     },
 
-    refreshSourceItemsFromDom(targetState, deps) {
+    async refreshSourceItemsFromDom(targetState, deps) {
       if (!targetState) {
         return { nextSourceItems: [], countChanged: false };
+      }
+
+      // sourceItems가 없거나 빈 배열이면 빈 결과 반환
+      if (!targetState.sourceItems || !Array.isArray(targetState.sourceItems)) {
+        const collectedItems = await deps.collectSourceItems(targetState.root);
+        return { nextSourceItems: collectedItems || [], countChanged: true };
       }
 
       const prevItemsByKey = new Map();
@@ -366,7 +416,8 @@
         }
       }
 
-      const nextSourceItems = deps.collectSourceItems(targetState.root).map((item) => {
+      const collectedItems = await deps.collectSourceItems(targetState.root);
+      const nextSourceItems = collectedItems.map((item) => {
         const prevItem = prevItemsByKey.get(deps.getStableItemKey(item));
         if (!prevItem) return item;
 
@@ -392,7 +443,7 @@
     },
 
     async retryMissingItems(targetState, deps) {
-      if (!targetState) {
+      if (!targetState || !targetState.sourceItems || !Array.isArray(targetState.sourceItems)) {
         return { orientationChangedPages: [] };
       }
 
@@ -450,18 +501,25 @@
     },
 
     pokeLazyImages(root) {
+      const adapter = getCurrentSiteAdapter();
       const imgs = Array.from(root.querySelectorAll("img"));
       for (const img of imgs) {
-        const dataOriginal = img.getAttribute("data-original");
-        const dataSrc = img.getAttribute("data-src");
-        if (!img.getAttribute("src") && dataOriginal) {
-          img.setAttribute("src", dataOriginal);
-        } else if (!img.getAttribute("src") && dataSrc) {
-          img.setAttribute("src", dataSrc);
+        try {
+          if (img.closest?.("#dcmv-overlay")) {
+            continue;
+          }
+          const dataOriginal = img.getAttribute("data-original");
+          const dataSrc = img.getAttribute("data-src");
+          const currentSrc = img.getAttribute("src");
+
+          if (!currentSrc && dataOriginal) {
+            img.setAttribute("src", dataOriginal);
+          } else if (!currentSrc && dataSrc) {
+            img.setAttribute("src", dataSrc);
+          }
+        } catch {
         }
       }
-
-      const adapter = getCurrentSiteAdapter();
       if (adapter && typeof adapter.pokeLazyImages === "function") {
         adapter.pokeLazyImages(root);
       }
@@ -495,7 +553,7 @@
     async initialPostLazyRefreshRound(targetState, deps) {
       if (!targetState) return;
 
-      const refreshResult = deps.refreshSourceItemsFromDom();
+      const refreshResult = await deps.refreshSourceItemsFromDom();
       const previousCount = targetState.totalCount;
       let didChange = false;
 
@@ -577,7 +635,7 @@
           deps.setHasAutoLazyWakeRun(true);
         }
 
-        const refreshResult = deps.refreshSourceItemsFromDom();
+        const refreshResult = await deps.refreshSourceItemsFromDom();
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
         await deps.hydrateImageMetadata(targetState.sourceItems);
         await deps.retryMissingItems();
@@ -625,7 +683,7 @@
         let didChange = hadManualPairingReset;
 
         await deps.wakeLazyImages(targetState.root);
-        const refreshResult = deps.refreshSourceItemsFromDom();
+        const refreshResult = await deps.refreshSourceItemsFromDom();
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
         await deps.hydrateImageMetadata(targetState.sourceItems);
         await deps.retryMissingItems();
@@ -680,10 +738,10 @@
       return new Promise((resolve) => setTimeout(resolve, ms));
     },
 
-    syncKnownDimensionsFromDom(targetState, deps) {
+    async syncKnownDimensionsFromDom(targetState, deps) {
       if (!targetState?.root || !targetState?.sourceItems?.length) return;
 
-      const refreshed = deps.refreshSourceItemsFromDom();
+      const refreshed = await deps.refreshSourceItemsFromDom();
       if (!refreshed?.nextSourceItems?.length) return;
 
       for (const nextItem of refreshed.nextSourceItems) {
@@ -704,7 +762,7 @@
       const startedAt = Date.now();
 
       while (deps.getState()) {
-        deps.syncKnownDimensionsFromDom();
+        await deps.syncKnownDimensionsFromDom();
 
         const allReady = deps.getState().sourceItems.every((item) =>
           deps.hasUsableImageMetadata(item)
@@ -762,7 +820,7 @@
       }
 
       await deps.ensureInitialAutoMetadataWindow();
-      deps.syncKnownDimensionsFromDom();
+      await deps.syncKnownDimensionsFromDom();
 
       const rawEvaluationItems = targetState.sourceItems.slice(0, deps.initialAutoEvalPageLimit);
       const evaluationItems = rawEvaluationItems.map((item) =>

@@ -1,0 +1,51 @@
+﻿<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>만갤 뷰어 설정</title>
+  <link rel="stylesheet" href="extension-settings.css">
+</head>
+<body>
+  <main class="options_root">
+    <header class="hero">
+      <div class="hero_badge">Mangall Viewer</div>
+      <h1 class="hero_title">사이트 액세스 설정</h1>
+      <p class="hero_desc">커스텀 사이트를 추가하여 만갤 뷰어에서 접근할 수 있도록 합니다.</p>
+    </header>
+
+    <section class="panel">
+      <h2 class="panel_title">사이트 추가</h2>
+      <p class="help_text">일부 사이트에서는 이미지 다운로드 방지 정책 때문에 적용이 안될 수 있습니다.<br></br></p>
+      <div class="form_grid">
+        <label class="field">
+          <span class="field_label">사이트 이름</span>
+          <input type="text" id="site_name" placeholder="예: 티스토리" class="site_input">
+        </label>
+        <label class="field">
+          <span class="field_label">URL 패턴</span>
+          <input type="text" id="site_pattern" placeholder="예: *.tistory.com" class="site_input">
+        </label>
+      </div>
+      <div class="actions">
+        <button id="add_site_btn" class="primary_btn" type="button">사이트 추가</button>
+        <div id="status_message" class="status_message" aria-live="polite"></div>
+      </div>
+      <p class="help_text">전체 주소, 호스트명, 와일드카드 주소를 넣어도 됩니다. 예를 들어 `https://abc.tistory.com/111`은 자동으로 `*://abc.tistory.com/*`로 저장됩니다.</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel_header">
+        <h2 class="panel_title">등록된 커스텀 사이트</h2>
+        <button id="refresh_btn" class="secondary_btn" type="button">설정 새로고침</button>
+      </div>
+      <div id="custom_sites_list" class="custom_sites_list"></div>
+    </section>
+  </main>
+
+  <script src="site-registry.js"></script>
+  <script src="sites/universal-site-settings.js"></script>
+  <script src="extension-settings.js"></script>
+</body>
+</html>
+

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
@@ -11,8 +11,19 @@
     <button id="open_btn" class="popup_btn" type="button">
       만갤 뷰어
     </button>
+
+    <div class="custom_sites_section">
+      <div class="section_title">커스텀 사이트</div>
+      <div id="custom_sites_list" class="custom_sites_list"></div>
+      <div class="add_site_form">
+        <input type="text" id="site_name" placeholder="사이트 이름" class="site_input">
+        <input type="text" id="site_pattern" placeholder="URL 패턴 (예: *://*.example.com/*)" class="site_input">
+        <button id="add_site_btn" class="popup_btn secondary" type="button">추가</button>
+      </div>
+    </div>
   </div>
   <script src="site-registry.js"></script>
+  <script src="sites/universal-site-settings.js"></script>
   <script src="sites/arca-live.js"></script>
   <script src="sites/blogspot.js"></script>
   <script src="sites/fc2.js"></script>
@@ -21,3 +32,4 @@
   <script src="popup.js"></script>
 </body>
 </html>
+
