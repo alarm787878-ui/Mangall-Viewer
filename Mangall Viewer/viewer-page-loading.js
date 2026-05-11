@@ -334,21 +334,31 @@
       if (!root || !targetItem) return null;
 
       const imgs = Array.from(root.querySelectorAll("img"));
-      const targetKey = deps.decodeHtml(targetItem.originalPopUrl || targetItem.src || "");
-
-      if (!targetKey) return null;
+      const targetKeys = deps.getComparableUrlsForItem
+        ? deps.getComparableUrlsForItem(targetItem)
+        : [deps.decodeHtml(targetItem.originalPopUrl || targetItem.src || "")].filter(Boolean);
+      if (!targetKeys.length) return null;
 
       for (const imgEl of imgs) {
-        const imgSrc =
-          imgEl.getAttribute("data-original") ||
-          imgEl.getAttribute("data-src") ||
-          imgEl.getAttribute("src") ||
-          "";
-
         const imgPopUrl = deps.parseOriginalPopUrlFromTag(imgEl.outerHTML || "");
-        const imgKey = deps.decodeHtml(imgPopUrl || imgSrc || "");
+        const imgUrls = deps.getComparableUrlsForItem
+          ? deps.getComparableUrlsForItem({
+              src: deps.decodeHtml(imgEl.currentSrc || imgEl.getAttribute("src") || ""),
+              resolvedSrc: "",
+              originalPopUrl: deps.decodeHtml(imgPopUrl || ""),
+              element: imgEl
+            })
+          : [
+              imgEl.currentSrc,
+              imgEl.getAttribute("src"),
+              imgEl.getAttribute("data-original"),
+              imgEl.getAttribute("data-src"),
+              imgPopUrl
+            ]
+              .map((value) => deps.decodeHtml(value || ""))
+              .filter(Boolean);
 
-        if (imgKey === targetKey) {
+        if (imgUrls.some((url) => targetKeys.includes(url))) {
           return imgEl;
         }
       }
@@ -421,13 +431,16 @@
         const prevItem = prevItemsByKey.get(deps.getStableItemKey(item));
         if (!prevItem) return item;
 
+        const sameSrc = (prevItem.src || "") === (item.src || "");
+
         return {
           ...item,
-          resolvedSrc: prevItem.resolvedSrc || item.resolvedSrc,
-          width: prevItem.width || item.width,
-          height: prevItem.height || item.height,
-          failed: prevItem.failed,
-          viewerRetryCount: prevItem.viewerRetryCount || 0
+          // lazy 로딩 뒤 DOM의 실제 src/크기가 바뀌면 새 값을 우선해야 양면/단면 판정이 갱신된다.
+          resolvedSrc: sameSrc ? prevItem.resolvedSrc || item.resolvedSrc : item.resolvedSrc,
+          width: item.width || prevItem.width,
+          height: item.height || prevItem.height,
+          failed: sameSrc ? prevItem.failed : item.failed,
+          viewerRetryCount: sameSrc ? prevItem.viewerRetryCount || 0 : 0
         };
       });
 
@@ -470,34 +483,117 @@
     async wakeLazyImages(root, deps) {
       if (!root) return;
 
-      const startY = window.scrollY || window.pageYOffset || 0;
+      const scrollDocument = root.ownerDocument || document;
+      const scrollWindow = scrollDocument.defaultView || window;
+      const scrollingElement =
+        scrollDocument.scrollingElement ||
+        scrollDocument.documentElement ||
+        scrollDocument.body;
+      const startY =
+        scrollWindow.scrollY ||
+        scrollWindow.pageYOffset ||
+        scrollingElement?.scrollTop ||
+        0;
 
-      window.scrollTo(0, 0);
-      await deps.sleep(deps.lazyWakeScrollDelayMs);
+      const getScrollTop = () =>
+        scrollWindow.scrollY ||
+        scrollWindow.pageYOffset ||
+        scrollingElement?.scrollTop ||
+        0;
+      const getScrollHeight = () =>
+        Math.max(
+          scrollingElement?.scrollHeight || 0,
+          scrollDocument.documentElement?.scrollHeight || 0,
+          scrollDocument.body?.scrollHeight || 0
+        );
+      const getViewportHeight = () =>
+        scrollWindow.innerHeight ||
+        scrollDocument.documentElement?.clientHeight ||
+        scrollingElement?.clientHeight ||
+        0;
+      const getViewportWidth = () =>
+        scrollWindow.innerWidth ||
+        scrollDocument.documentElement?.clientWidth ||
+        scrollingElement?.clientWidth ||
+        0;
+      const lockedElements = [
+        scrollDocument.documentElement,
+        scrollDocument.body,
+        document.documentElement,
+        document.body
+      ].filter((el, index, list) => el && list.indexOf(el) === index);
+      const originallyLockedElements = lockedElements.filter((el) =>
+        el.classList?.contains("dcmv-lock-scroll")
+      );
+      const scrollToY = (y) => {
+        // 일부 사이트는 window 스크롤 대신 scrollingElement를 직접 움직일 때만 lazy 로더가 반응한다.
+        try {
+          scrollWindow.scrollTo(0, y);
+        } catch {
+        }
+        if (scrollingElement) {
+          scrollingElement.scrollTop = y;
+        }
+      };
+      const sendWheel = (deltaY) => {
+        // 사이트가 wheel 이벤트를 기준으로 이미지를 깨우는 경우를 위한 물리 스크롤에 가까운 보조 입력.
+        try {
+          const event = new WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            view: scrollWindow,
+            deltaY,
+            deltaMode: 0
+          });
+          // elementFromPoint를 쓰면 뷰어 오버레이가 이벤트를 받아 페이지가 넘어갈 수 있어서,
+          // 실제 스크롤 담당 요소에만 보낸다.
+          (scrollingElement || scrollDocument).dispatchEvent(event);
+        } catch {
+        }
+      };
 
-      let y = 0;
-      let lastScrollY = -1;
-      let stuckCount = 0;
-
-      while (stuckCount < 2) {
-        deps.pokeLazyImages(root);
-        window.scrollTo(0, y);
-        await deps.sleep(deps.lazyWakeScrollDelayMs);
-
-        const currentScrollY = window.scrollY || window.pageYOffset || 0;
-        if (currentScrollY <= lastScrollY) {
-          stuckCount += 1;
-        } else {
-          stuckCount = 0;
-          lastScrollY = currentScrollY;
+      try {
+        for (const el of originallyLockedElements) {
+          el.classList.remove("dcmv-lock-scroll");
         }
 
-        y = currentScrollY + deps.lazyWakeScrollStep;
-      }
+        scrollToY(0);
+        await deps.sleep(deps.lazyWakeScrollDelayMs);
 
-      deps.pokeLazyImages(root);
-      window.scrollTo(0, startY);
-      deps.pokeLazyImages(root);
+        let y = 0;
+        let lastScrollY = -1;
+        let stuckCount = 0;
+
+        while (stuckCount < 2) {
+          deps.pokeLazyImages(root);
+          sendWheel(deps.lazyWakeScrollStep);
+          scrollToY(y);
+          await deps.sleep(deps.lazyWakeScrollDelayMs);
+
+          const currentScrollY = getScrollTop();
+          const maxY = Math.max(0, getScrollHeight() - getViewportHeight());
+          if (currentScrollY <= lastScrollY) {
+            stuckCount += 1;
+          } else {
+            stuckCount = 0;
+            lastScrollY = currentScrollY;
+          }
+
+          if (maxY > 0 && currentScrollY >= maxY - 2) {
+            break;
+          }
+
+          y = currentScrollY + deps.lazyWakeScrollStep;
+        }
+
+        deps.pokeLazyImages(root);
+        scrollToY(startY);
+        deps.pokeLazyImages(root);
+      } finally {
+        for (const el of originallyLockedElements) {
+          el.classList.add("dcmv-lock-scroll");
+        }
+      }
     },
 
     pokeLazyImages(root) {

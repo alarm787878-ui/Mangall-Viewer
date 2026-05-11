@@ -32,6 +32,7 @@
       const wheel = (e) => {
         const state = deps.getState();
         if (!state) return;
+        if (e.isTrusted === false) return;
 
         if (canScrollInsideCommentPanel(e.target, e.deltaY)) {
           e.stopPropagation();

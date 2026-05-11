@@ -544,11 +544,16 @@
 
       let el = item.element;
 
-      if (!el || !document.contains(el)) {
+      const isElementStillAttached = (target) => {
+        const ownerDocument = target?.ownerDocument || document;
+        return !!target && ownerDocument.contains(target);
+      };
+
+      if (!isElementStillAttached(el)) {
         el = findElementForSourceItem(root, item);
       }
 
-      if (el && document.contains(el)) {
+      if (isElementStillAttached(el)) {
         el.scrollIntoView({
           behavior: "auto",
           block: "center",
@@ -1439,7 +1444,8 @@
     return runtimeModules.pageLoading?.findElementForSourceItem
       ? runtimeModules.pageLoading.findElementForSourceItem(root, targetItem, {
           decodeHtml,
-          parseOriginalPopUrlFromTag
+          parseOriginalPopUrlFromTag,
+          getComparableUrlsForItem
         })
       : null;
   }

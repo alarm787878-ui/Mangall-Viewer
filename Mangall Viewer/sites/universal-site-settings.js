@@ -8,6 +8,9 @@
     "#article",
     "#chapterContent",
     "#scroll-list",
+    "#postViewArea",
+    "#post-area",
+    ".se-main-container",
     ".vw-imgs",
     ".vw-main",
     ".view-content",
@@ -38,6 +41,9 @@
 
   const GENERIC_CONTENT_SELECTORS = [
     "#chapterContent",
+    "#postViewArea",
+    "#post-area",
+    ".se-main-container",
     ".vw-imgs",
     ".vw-main",
     "#scroll-list",
@@ -443,8 +449,16 @@
       }
     },
 
+    isElementLike(value) {
+      return !!value && value.nodeType === 1 && typeof value.getAttribute === "function";
+    },
+
+    isImageElementLike(value) {
+      return this.isElementLike(value) && String(value.tagName || "").toLowerCase() === "img";
+    },
+
     getKnownImageSize(imgEl) {
-      if (!(imgEl instanceof Element)) {
+      if (!this.isElementLike(imgEl)) {
         return { width: 0, height: 0 };
       }
 
@@ -455,13 +469,31 @@
       return {
         width:
           imgEl.naturalWidth ||
+          Number(imgEl.getAttribute("data-origin-width")) ||
+          Number(imgEl.getAttribute("data-width")) ||
           Number(imgEl.getAttribute("width")) ||
           Math.round(rect?.width || 0),
         height:
           imgEl.naturalHeight ||
+          Number(imgEl.getAttribute("data-origin-height")) ||
+          Number(imgEl.getAttribute("data-height")) ||
           Number(imgEl.getAttribute("height")) ||
           Math.round(rect?.height || 0)
       };
+    },
+
+    hasLargeImageSize(imgEl) {
+      const { width, height } = this.getKnownImageSize(imgEl);
+      if (!width || !height) return false;
+
+      const longSide = Math.max(width, height);
+      const area = width * height;
+      return longSide >= MIN_CONTENT_IMAGE_LONG_SIDE && area >= MIN_CONTENT_IMAGE_AREA;
+    },
+
+    shouldTreatAsContentImageElement(imgEl, url) {
+      if (this.shouldTreatAsContentImage(url)) return true;
+      return !!url && this.isImageElementLike(imgEl) && this.hasLargeImageSize(imgEl);
     },
 
     isTooSmallContentImage(imgEl) {
@@ -473,15 +505,38 @@
       return longSide < MIN_CONTENT_IMAGE_LONG_SIDE || area < MIN_CONTENT_IMAGE_AREA;
     },
 
+    getLoadedCurrentImageUrl(imgEl, deps) {
+      if (!this.isImageElementLike(imgEl)) return "";
+
+      const currentUrl = imgEl.currentSrc || imgEl.getAttribute("src") || "";
+      if (!currentUrl) return "";
+
+      const width = imgEl.naturalWidth || 0;
+      const height = imgEl.naturalHeight || 0;
+      if (!width || !height) return "";
+
+      const longSide = Math.max(width, height);
+      const area = width * height;
+      if (longSide < MIN_CONTENT_IMAGE_LONG_SIDE || area < MIN_CONTENT_IMAGE_AREA) {
+        return "";
+      }
+
+      return deps.decodeHtml(currentUrl);
+    },
+
     extractImageUrlFromElement(imgEl, deps) {
-      if (!(imgEl instanceof Element)) return "";
+      if (!this.isElementLike(imgEl)) return "";
 
       const anchorHref = imgEl.closest("a[href]")?.getAttribute("href") || "";
       const candidate =
+        this.getLoadedCurrentImageUrl(imgEl, deps) ||
+        imgEl.getAttribute("data-img-src") ||
         imgEl.getAttribute("data-src") ||
         imgEl.getAttribute("data-original") ||
+        imgEl.getAttribute("data-original-src") ||
         imgEl.getAttribute("data-lazy-src") ||
         imgEl.getAttribute("data-url") ||
+        imgEl.currentSrc ||
         imgEl.getAttribute("src") ||
         anchorHref ||
         deps.resolveImageUrlFromTag(imgEl.outerHTML || "");
@@ -490,12 +545,13 @@
     },
 
     buildSourceItem(url, imgEl, originalPopUrl, index) {
+      const size = this.getKnownImageSize(imgEl);
       return {
         src: url || "",
         originalPopUrl: originalPopUrl || "",
         resolvedSrc: "",
-        width: imgEl?.naturalWidth || Number(imgEl?.getAttribute?.("width")) || 0,
-        height: imgEl?.naturalHeight || Number(imgEl?.getAttribute?.("height")) || 0,
+        width: size.width,
+        height: size.height,
         alt: imgEl?.getAttribute?.("alt") || "",
         index,
         displayIndex: index + 1,
@@ -506,7 +562,14 @@
 
     compareDocumentOrder(a, b) {
       if (a === b) return 0;
-      if (!(a instanceof Node) || !(b instanceof Node)) return 0;
+      if (
+        !a ||
+        !b ||
+        typeof a.compareDocumentPosition !== "function" ||
+        typeof b.compareDocumentPosition !== "function"
+      ) {
+        return 0;
+      }
 
       const position = a.compareDocumentPosition(b);
       if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
@@ -515,8 +578,8 @@
     },
 
     getRootBranchElement(imgEl, root) {
-      if (!(imgEl instanceof Element)) return null;
-      if (!(root instanceof Element)) {
+      if (!this.isElementLike(imgEl)) return null;
+      if (!this.isElementLike(root)) {
         return imgEl.parentElement || imgEl;
       }
 
@@ -540,7 +603,7 @@
           const candidate = node.matches?.("img")
             ? node
             : node.querySelector?.("img") || node;
-          if (!(candidate instanceof Element) || seenElements.has(candidate)) {
+          if (!this.isElementLike(candidate) || seenElements.has(candidate)) {
             continue;
           }
           seenElements.add(candidate);
@@ -555,12 +618,12 @@
 
       for (const node of nodes) {
         const imgEl =
-          node instanceof HTMLImageElement
+          this.isImageElementLike(node)
             ? node
             : node?.querySelector instanceof Function
               ? node.querySelector("img")
               : null;
-        if (!(imgEl instanceof Element)) continue;
+        if (!this.isElementLike(imgEl)) continue;
         if (adapterApi.isInsideExcludedImageCommentArea(imgEl)) continue;
         if (adapterApi.isInsideOpenGraphPreview(imgEl)) continue;
 
@@ -570,7 +633,7 @@
         );
         const contentKey = url || anchorHref;
 
-        if (!this.shouldTreatAsContentImage(contentKey)) {
+        if (!this.shouldTreatAsContentImageElement(imgEl, contentKey)) {
           continue;
         }
 
@@ -598,6 +661,21 @@
       return orderedItems.map((item, index) =>
         this.buildSourceItem(item.url, item.imgEl, item.anchorHref, index)
       );
+    },
+
+    getAccessibleEmbeddedDocuments(doc = document) {
+      const documents = [];
+      const frames = Array.from(doc.querySelectorAll?.("iframe, frame") || []);
+      for (const frame of frames) {
+        try {
+          const frameDoc = frame.contentDocument || frame.contentWindow?.document;
+          if (frameDoc?.body) {
+            documents.push(frameDoc);
+          }
+        } catch {
+        }
+      }
+      return documents;
     },
 
     extractScriptArrayStringLists(text) {
@@ -879,23 +957,25 @@
       const universalSiteSettings = this;
 
       function countContentImages(root) {
-        if (!(root instanceof Element) && root !== document.body) {
+        if (!universalSiteSettings.isElementLike(root) && root !== document.body) {
           return 0;
         }
 
         const images = Array.from(root.querySelectorAll?.("img") || []);
         let count = 0;
         for (const img of images) {
-          if (!(img instanceof Element)) continue;
+          if (!universalSiteSettings.isElementLike(img)) continue;
           if (img.closest("#dcmv-overlay")) continue;
 
           const src =
+            img.getAttribute("data-img-src") ||
             img.getAttribute("data-src") ||
             img.getAttribute("data-lazy-src") ||
             img.getAttribute("data-original") ||
+            img.getAttribute("data-original-src") ||
             img.getAttribute("src") ||
             "";
-          if (!universalSiteSettings.shouldTreatAsContentImage(src)) continue;
+          if (!universalSiteSettings.shouldTreatAsContentImageElement(img, src)) continue;
           count += 1;
         }
 
@@ -915,17 +995,29 @@
           return typeof url === "string" && regex.test(url);
         },
         findContentRoot(doc = document) {
+          let fallbackRoot = null;
+          let bestRoot = null;
+          let bestScore = 0;
+
           for (const selector of contentSelectors) {
             const el = doc.querySelector(selector);
-            if (el) return el;
+            if (!el) continue;
+
+            if (!fallbackRoot) {
+              fallbackRoot = el;
+            }
+
+            const score = countContentImages(el);
+            if (score > bestScore) {
+              bestRoot = el;
+              bestScore = score;
+            }
           }
 
           const candidateRoots = Array.from(
-            doc.querySelectorAll?.("article, main, section, .content, .post-content, .entry-content, .article-content, .viewer-wrap, .read-content, .reading-content, #content, #contents") || []
+            doc.querySelectorAll?.("article, main, section, .content, .post-content, .entry-content, .article-content, .viewer-wrap, .read-content, .reading-content, #postViewArea, #post-area, .se-main-container, #content, #contents") || []
           ).filter((el) => !el.closest?.("#dcmv-overlay"));
 
-          let bestRoot = null;
-          let bestScore = 0;
           for (const candidate of candidateRoots) {
             const score = countContentImages(candidate);
             if (score > bestScore) {
@@ -938,7 +1030,20 @@
             return bestRoot;
           }
 
-          return doc.body;
+          for (const frameDoc of universalSiteSettings.getAccessibleEmbeddedDocuments(doc)) {
+            const frameRoot = this.findContentRoot(frameDoc);
+            const frameScore = countContentImages(frameRoot);
+            if (frameRoot && frameScore > bestScore) {
+              bestRoot = frameRoot;
+              bestScore = frameScore;
+            }
+          }
+
+          if (bestRoot && bestScore > 0) {
+            return bestRoot;
+          }
+
+          return fallbackRoot || doc.body;
         },
         async collectSourceItems(root, deps) {
           const fromDom = universalSiteSettings.collectDomSourceItems(root, deps, this);
@@ -954,14 +1059,14 @@
           return universalSiteSettings.collectObservedResourceItems();
         },
         isInsideExcludedImageCommentArea(el) {
-          if (!(el instanceof Element)) return false;
+          if (!universalSiteSettings.isElementLike(el)) return false;
           return !!el.closest(excludedSelectors.join(", "));
         },
         isExcludedInlineDcconImage() {
           return false;
         },
         isInsideOpenGraphPreview(el) {
-          if (!(el instanceof Element)) return false;
+          if (!universalSiteSettings.isElementLike(el)) return false;
           return !!el.closest("[property^='og:'], meta, link[rel='image_src']");
         },
         convertPopUrlToDirectImageUrl(popUrl) {
@@ -974,7 +1079,9 @@
           return (
             deps.decodeHtml(deps.parseAttr(tag, "data-src")) ||
             deps.decodeHtml(deps.parseAttr(tag, "data-lazy-src")) ||
+            deps.decodeHtml(deps.parseAttr(tag, "data-img-src")) ||
             deps.decodeHtml(deps.parseAttr(tag, "data-original")) ||
+            deps.decodeHtml(deps.parseAttr(tag, "data-original-src")) ||
             deps.decodeHtml(deps.parseAttr(tag, "src")) ||
             ""
           );
