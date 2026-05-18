@@ -788,6 +788,15 @@
         return true;
       }
 
+      if (next.sourceType === "observed") {
+        const overlap = this.getSourceItemOverlapRatio(previous.items, next.items);
+        const prevDominantRatio = previous.scoreInfo?.folderStats?.dominantRatio || 0;
+        const nextDominantRatio = next.scoreInfo?.folderStats?.dominantRatio || 0;
+        if (overlap >= 0.8 && nextCount > prevCount && nextDominantRatio < prevDominantRatio) {
+          return false;
+        }
+      }
+
       // 자동 재탐색 중 댓글/프로필 묶음처럼 보이는 목록이 기존 만화 목록을 덮지 못하게 막는다.
       if (prevCount >= 5 && nextCount <= 2) return false;
       if (prevCount >= 5 && nextInfo.commentRatio >= 0.3) return false;
@@ -1318,6 +1327,30 @@
             return [];
           }
 
+          const scriptCandidate = candidates.find((candidate) => candidate.sourceType === "script");
+          const observedCandidate = candidates.find((candidate) => candidate.sourceType === "observed");
+          if (scriptCandidate && observedCandidate) {
+            const overlap = universalSiteSettings.getSourceItemOverlapRatio(
+              scriptCandidate.items,
+              observedCandidate.items
+            );
+            const scriptDominantRatio = scriptCandidate.scoreInfo?.folderStats?.dominantRatio || 0;
+            const observedDominantRatio = observedCandidate.scoreInfo?.folderStats?.dominantRatio || 0;
+            if (
+              overlap >= 0.8 &&
+              observedCandidate.items.length > scriptCandidate.items.length &&
+              observedDominantRatio < scriptDominantRatio
+            ) {
+              observedCandidate.scoreInfo = {
+                ...observedCandidate.scoreInfo,
+                score: Math.min(
+                  observedCandidate.scoreInfo.score,
+                  Math.max(0, scriptCandidate.scoreInfo.score - 1)
+                )
+              };
+            }
+          }
+
           candidates.sort((a, b) => b.scoreInfo.score - a.scoreInfo.score);
           const bestCandidate = candidates[0];
           const shouldReplace = universalSiteSettings.shouldReplacePreviousGenericItems(
@@ -1334,9 +1367,6 @@
             index,
             displayIndex: index + 1
           }));
-        },
-        getDebugSelectedSource() {
-          return previousSelectedSource;
         },
         isInsideExcludedImageCommentArea(el) {
           if (!universalSiteSettings.isElementLike(el)) return false;
@@ -1391,89 +1421,5 @@
     }
   };
 
-  if (typeof document !== "undefined" && !globalThis.__dcmvGenericScoreDebugReady) {
-    globalThis.__dcmvGenericScoreDebugReady = true;
-    document.addEventListener("dcmv:debug-generic-scores", () => {
-      const settings = modules.universalSiteSettings;
-      const adapter =
-        globalThis.__dcmvSiteRegistry?.getSiteAdapterForUrl?.(location.href) || {
-          findContentRoot() {
-            return document.querySelector("#scroll-list") || document.body;
-          },
-          isInsideExcludedImageCommentArea() {
-            return false;
-          },
-          isInsideOpenGraphPreview() {
-            return false;
-          },
-          resolveImageUrlFromTag() {
-            return "";
-          }
-        };
-      const deps = {
-        decodeHtml(value) {
-          const textarea = document.createElement("textarea");
-          textarea.innerHTML = String(value || "");
-          return textarea.value;
-        },
-        parseAttr(tag, name) {
-          const match = String(tag || "").match(
-            new RegExp(`${name}=["']([^"']*)["']`, "i")
-          );
-          return match?.[1] || "";
-        },
-        resolveImageUrlFromTag(tag) {
-          return adapter.resolveImageUrlFromTag?.(tag, deps) || "";
-        }
-      };
-      const root = adapter.findContentRoot?.() || document.body;
-      const candidateRows = [
-        ["dom", settings.collectDomSourceItems(root, deps, adapter)],
-        ["script", settings.collectScriptArraySourceItems()],
-        ["observed", settings.collectObservedResourceItems()]
-      ]
-        .map(([type, items]) => {
-          const typedItems = settings.withGenericSourceType(items, type);
-          const scoreInfo = settings.scoreSourceItemList(typedItems, type);
-          return {
-            type,
-            count: items.length,
-            score: scoreInfo.score,
-            large: scoreInfo.largeCount,
-            medianArea: Math.round(scoreInfo.medianArea),
-            commentRatio: Number(scoreInfo.commentRatio.toFixed(2)),
-            squareRatio: Number(scoreInfo.squareRatio.toFixed(2)),
-            smallRatio: Number(scoreInfo.smallRatio.toFixed(2)),
-            dominantFolderCount: scoreInfo.folderStats.dominantCount,
-            dominantRatio: Number(scoreInfo.folderStats.dominantRatio.toFixed(2))
-          };
-        });
-      const selected = adapter.getDebugSelectedSource?.();
-      let currentRow = null;
-      if (selected?.items?.length) {
-        const selectedInfo = selected.scoreInfo ||
-          settings.scoreSourceItemList(selected.items, selected.sourceType || "selected");
-        currentRow = {
-          type: `current-selected:${selected.sourceType || "unknown"}`,
-          count: selected.items.length,
-          score: selectedInfo.score,
-          large: selectedInfo.largeCount,
-          medianArea: Math.round(selectedInfo.medianArea),
-          commentRatio: Number(selectedInfo.commentRatio.toFixed(2)),
-          squareRatio: Number(selectedInfo.squareRatio.toFixed(2)),
-          smallRatio: Number(selectedInfo.smallRatio.toFixed(2)),
-          dominantFolderCount: selectedInfo.folderStats.dominantCount,
-          dominantRatio: Number(selectedInfo.folderStats.dominantRatio.toFixed(2))
-        };
-      }
-      const rows = currentRow ? [currentRow, ...candidateRows] : candidateRows;
-
-      console.log("[dcmv] generic score current", currentRow || null);
-      console.log("[dcmv] generic score candidates", candidateRows);
-      console.table(rows);
-      console.log("[dcmv] generic score all", rows);
-      console.log("[dcmv] generic score winner", rows.slice().sort((a, b) => b.score - a.score)[0] || null);
-    });
-  }
 })();
 
