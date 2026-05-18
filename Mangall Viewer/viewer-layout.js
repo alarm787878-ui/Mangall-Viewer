@@ -1,7 +1,7 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
   const dcinsideComments = globalThis.__dcmvDcinsideComments || null;
-  const MAX_VIEWER_UPSCALE = 1.5;
+  const MAX_VIEWER_UPSCALE = 1.75;
 
   function sizeViewerRenderBox(renderBox, item, displayType = "single") {
     if (!(renderBox instanceof HTMLElement)) {

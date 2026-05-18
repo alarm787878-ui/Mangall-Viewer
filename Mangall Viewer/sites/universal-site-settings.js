@@ -67,6 +67,21 @@
   ];
   const MIN_CONTENT_IMAGE_LONG_SIDE = 320;
   const MIN_CONTENT_IMAGE_AREA = 80000;
+  const GENERIC_COMMENT_LIKE_SELECTORS = [
+    "#comments",
+    ".comments",
+    ".comment-section",
+    ".coments",
+    ".coment-body",
+    ".coment-user-list",
+    ".pc-commalllist",
+    ".mobile-commalllist",
+    ".media-user",
+    ".user-coment",
+    ".de-btn",
+    "[class*='comment']",
+    "[class*='coment']"
+  ];
 
   if (typeof window !== "undefined" && !window.__dcmvGenericObservedImageUrls) {
     window.__dcmvGenericObservedImageUrls = [];
@@ -560,6 +575,232 @@
       };
     },
 
+    withGenericSourceType(items, sourceType) {
+      return (items || []).map((item) => ({
+        ...item,
+        __dcmvGenericSourceType: sourceType
+      }));
+    },
+
+    isInsideGenericCommentLikeArea(el) {
+      if (!this.isElementLike(el)) return false;
+      return !!el.closest(GENERIC_COMMENT_LIKE_SELECTORS.join(", "));
+    },
+
+    isLikelyUiOrProfileImageUrl(url) {
+      const value = String(url || "").toLowerCase();
+      if (!value) return false;
+
+      return /(?:userdef|avatar|profile|\/user\/|\/users\/|\/member\/|\/members\/|\/icon|icons?\/|button|reply|comment|coment|like|recommend|vote|static\/images\/(?:up|down|\d+)\.(?:png|gif|jpe?g|webp))/i.test(value);
+    },
+
+    getMedianNumber(values) {
+      const numbers = (values || [])
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .sort((a, b) => a - b);
+      if (!numbers.length) return 0;
+
+      const middle = Math.floor(numbers.length / 2);
+      return numbers.length % 2
+        ? numbers[middle]
+        : (numbers[middle - 1] + numbers[middle]) / 2;
+    },
+
+    getDominantFolderStats(items) {
+      const counts = new Map();
+      const seenUrls = new Set();
+
+      for (const item of items || []) {
+        const url = this.normalizeImageUrl(item?.src || item?.resolvedSrc || item?.originalPopUrl || "");
+        if (!url || seenUrls.has(url)) continue;
+        seenUrls.add(url);
+
+        const folderKey = this.getImageFolderKey(url);
+        counts.set(folderKey, (counts.get(folderKey) || 0) + 1);
+      }
+
+      let dominantCount = 0;
+      for (const count of counts.values()) {
+        dominantCount = Math.max(dominantCount, count);
+      }
+
+      return {
+        uniqueCount: seenUrls.size,
+        folderCount: counts.size,
+        dominantCount,
+        dominantRatio: seenUrls.size ? dominantCount / seenUrls.size : 0
+      };
+    },
+
+    getSourceItemUrlSet(items) {
+      const urls = new Set();
+      for (const item of items || []) {
+        const url = this.normalizeImageUrl(item?.src || item?.resolvedSrc || item?.originalPopUrl || "");
+        if (url) urls.add(url);
+      }
+      return urls;
+    },
+
+    getSourceItemOverlapRatio(aItems, bItems) {
+      const aUrls = this.getSourceItemUrlSet(aItems);
+      const bUrls = this.getSourceItemUrlSet(bItems);
+      const smallerSize = Math.min(aUrls.size, bUrls.size);
+      if (!smallerSize) return 0;
+
+      let overlap = 0;
+      for (const url of aUrls) {
+        if (bUrls.has(url)) overlap += 1;
+      }
+      return overlap / smallerSize;
+    },
+
+    getAreaScore(medianArea) {
+      if (medianArea >= 500000) return 250;
+      if (medianArea >= 250000) return 180;
+      if (medianArea >= 150000) return 120;
+      if (medianArea >= 80000) return 60;
+      return 0;
+    },
+
+    scoreSourceItemList(items, sourceType = "") {
+      const sourceItems = Array.isArray(items) ? items : [];
+      const count = sourceItems.length;
+      if (!count) {
+        return {
+          score: 0,
+          count: 0,
+          largeCount: 0,
+          largeRatio: 0,
+          commentRatio: 0,
+          medianArea: 0,
+          squareRatio: 0,
+          smallRatio: 0
+        };
+      }
+
+      let largeCount = 0;
+      let smallCount = 0;
+      let squareCount = 0;
+      let bannerCount = 0;
+      let commentCount = 0;
+      let uiUrlCount = 0;
+      let knownSizeCount = 0;
+      let totalLargeArea = 0;
+      const areas = [];
+
+      for (const item of sourceItems) {
+        const width = Number(item?.width) || 0;
+        const height = Number(item?.height) || 0;
+        const url = item?.src || item?.resolvedSrc || item?.originalPopUrl || "";
+        const hasKnownSize = width > 0 && height > 0;
+
+        if (hasKnownSize) {
+          knownSizeCount += 1;
+          const longSide = Math.max(width, height);
+          const shortSide = Math.min(width, height);
+          const area = width * height;
+          areas.push(area);
+
+          if (longSide >= 500 && area >= 150000) {
+            largeCount += 1;
+            totalLargeArea += area;
+          }
+          if (longSide < 320 || area < 80000) {
+            smallCount += 1;
+          }
+          if (shortSide > 0 && longSide / shortSide <= 1.25) {
+            squareCount += 1;
+          }
+          if (shortSide > 0 && longSide / shortSide >= 4) {
+            bannerCount += 1;
+          }
+        }
+
+        if (this.isInsideGenericCommentLikeArea(item?.element)) {
+          commentCount += 1;
+        }
+        if (this.isLikelyUiOrProfileImageUrl(url)) {
+          uiUrlCount += 1;
+        }
+      }
+
+      const folderStats = this.getDominantFolderStats(sourceItems);
+      const medianArea = this.getMedianNumber(areas);
+      const largeRatio = largeCount / count;
+      const smallRatio = knownSizeCount ? smallCount / knownSizeCount : 0;
+      const squareRatio = knownSizeCount ? squareCount / knownSizeCount : 0;
+      const bannerRatio = knownSizeCount ? bannerCount / knownSizeCount : 0;
+      const commentRatio = commentCount / count;
+      const uiUrlRatio = uiUrlCount / count;
+      const uniqueRatio = count ? folderStats.uniqueCount / count : 0;
+      const scriptLike = sourceType === "script";
+
+      let score = 0;
+      score += Math.min(largeCount, 40) * 120;
+      score += largeRatio * 300;
+      score += this.getAreaScore(medianArea);
+      score += Math.min(totalLargeArea / 2000000, 1) * 40;
+      score += Math.min(folderStats.dominantCount, 30) * 12;
+      score += folderStats.dominantRatio >= 0.5 && folderStats.dominantCount >= 3 ? 220 : 0;
+      score += uniqueRatio >= 0.8 ? 90 : 0;
+      score += scriptLike && folderStats.dominantCount >= 3 ? 250 : 0;
+      score += !knownSizeCount && scriptLike && count >= 5 ? 180 : 0;
+      score += count >= 5 ? 80 : 0;
+
+      score -= commentRatio * 500;
+      score -= smallRatio * 350;
+      score -= squareRatio * 180;
+      score -= bannerRatio * 180;
+      score -= uiUrlRatio * 250;
+      if (knownSizeCount && largeCount === 0) score -= 300;
+      if (knownSizeCount && medianArea < 80000) score -= 250;
+      if (commentRatio >= 0.5) score -= 500;
+      if (squareRatio >= 0.8 && medianArea < 150000) score -= 250;
+
+      return {
+        score: Math.max(0, Math.round(score)),
+        count,
+        largeCount,
+        largeRatio,
+        commentRatio,
+        medianArea,
+        squareRatio,
+        smallRatio,
+        sourceType,
+        folderStats
+      };
+    },
+
+    shouldReplacePreviousGenericItems(previous, next) {
+      if (!previous?.items?.length) return true;
+      if (!next?.items?.length) return false;
+
+      const prevScore = previous.scoreInfo?.score || 0;
+      const nextScore = next.scoreInfo?.score || 0;
+      const prevCount = previous.items.length;
+      const nextCount = next.items.length;
+      const nextInfo = next.scoreInfo || {};
+      const sameSourceOverlap = previous.sourceType === next.sourceType
+        ? this.getSourceItemOverlapRatio(previous.items, next.items)
+        : 0;
+
+      if (sameSourceOverlap >= 0.7) {
+        return true;
+      }
+
+      // 자동 재탐색 중 댓글/프로필 묶음처럼 보이는 목록이 기존 만화 목록을 덮지 못하게 막는다.
+      if (prevCount >= 5 && nextCount <= 2) return false;
+      if (prevCount >= 5 && nextInfo.commentRatio >= 0.3) return false;
+      if (prevCount >= 5 && nextInfo.largeCount === 0 && nextInfo.medianArea < 80000) return false;
+      if (previous.sourceType === "script" && next.sourceType !== "script") {
+        const prevFolderCount = previous.scoreInfo?.folderStats?.dominantCount || 0;
+        if (prevFolderCount >= 3 && nextScore < prevScore * 1.5) return false;
+      }
+
+      const requiredRatio = prevScore >= 700 ? 1.5 : 1.3;
+      return nextScore >= prevScore * requiredRatio;
+    },
+
     compareDocumentOrder(a, b) {
       if (a === b) return 0;
       if (
@@ -955,6 +1196,7 @@
       const excludedSelectors = site.excludedSelectors || DEFAULT_EXCLUDED_SELECTORS;
       const normalizedPattern = this.normalizeUrlPatternInput(site.urlPattern || "");
       const universalSiteSettings = this;
+      let previousSelectedSource = null;
 
       function countContentImages(root) {
         if (!universalSiteSettings.isElementLike(root) && root !== document.body) {
@@ -1046,17 +1288,55 @@
           return fallbackRoot || doc.body;
         },
         async collectSourceItems(root, deps) {
-          const fromDom = universalSiteSettings.collectDomSourceItems(root, deps, this);
-          if (fromDom.length > 0) {
-            return fromDom;
+          const candidates = [];
+          const pushCandidate = (items, sourceType) => {
+            if (!Array.isArray(items) || !items.length) return;
+
+            const typedItems = universalSiteSettings.withGenericSourceType(items, sourceType);
+            candidates.push({
+              items: typedItems,
+              sourceType,
+              scoreInfo: universalSiteSettings.scoreSourceItemList(typedItems, sourceType)
+            });
+          };
+
+          pushCandidate(
+            universalSiteSettings.collectDomSourceItems(root, deps, this),
+            "dom"
+          );
+          pushCandidate(
+            universalSiteSettings.collectScriptArraySourceItems(),
+            "script"
+          );
+          pushCandidate(
+            universalSiteSettings.collectObservedResourceItems(),
+            "observed"
+          );
+
+          if (!candidates.length) {
+            previousSelectedSource = null;
+            return [];
           }
 
-          const fromScriptArray = universalSiteSettings.collectScriptArraySourceItems();
-          if (fromScriptArray.length > 0) {
-            return fromScriptArray;
-          }
+          candidates.sort((a, b) => b.scoreInfo.score - a.scoreInfo.score);
+          const bestCandidate = candidates[0];
+          const shouldReplace = universalSiteSettings.shouldReplacePreviousGenericItems(
+            previousSelectedSource,
+            bestCandidate
+          );
+          const selected = shouldReplace && bestCandidate
+            ? bestCandidate
+            : previousSelectedSource || bestCandidate;
 
-          return universalSiteSettings.collectObservedResourceItems();
+          previousSelectedSource = selected;
+          return selected.items.map((item, index) => ({
+            ...item,
+            index,
+            displayIndex: index + 1
+          }));
+        },
+        getDebugSelectedSource() {
+          return previousSelectedSource;
         },
         isInsideExcludedImageCommentArea(el) {
           if (!universalSiteSettings.isElementLike(el)) return false;
@@ -1110,5 +1390,90 @@
       };
     }
   };
+
+  if (typeof document !== "undefined" && !globalThis.__dcmvGenericScoreDebugReady) {
+    globalThis.__dcmvGenericScoreDebugReady = true;
+    document.addEventListener("dcmv:debug-generic-scores", () => {
+      const settings = modules.universalSiteSettings;
+      const adapter =
+        globalThis.__dcmvSiteRegistry?.getSiteAdapterForUrl?.(location.href) || {
+          findContentRoot() {
+            return document.querySelector("#scroll-list") || document.body;
+          },
+          isInsideExcludedImageCommentArea() {
+            return false;
+          },
+          isInsideOpenGraphPreview() {
+            return false;
+          },
+          resolveImageUrlFromTag() {
+            return "";
+          }
+        };
+      const deps = {
+        decodeHtml(value) {
+          const textarea = document.createElement("textarea");
+          textarea.innerHTML = String(value || "");
+          return textarea.value;
+        },
+        parseAttr(tag, name) {
+          const match = String(tag || "").match(
+            new RegExp(`${name}=["']([^"']*)["']`, "i")
+          );
+          return match?.[1] || "";
+        },
+        resolveImageUrlFromTag(tag) {
+          return adapter.resolveImageUrlFromTag?.(tag, deps) || "";
+        }
+      };
+      const root = adapter.findContentRoot?.() || document.body;
+      const candidateRows = [
+        ["dom", settings.collectDomSourceItems(root, deps, adapter)],
+        ["script", settings.collectScriptArraySourceItems()],
+        ["observed", settings.collectObservedResourceItems()]
+      ]
+        .map(([type, items]) => {
+          const typedItems = settings.withGenericSourceType(items, type);
+          const scoreInfo = settings.scoreSourceItemList(typedItems, type);
+          return {
+            type,
+            count: items.length,
+            score: scoreInfo.score,
+            large: scoreInfo.largeCount,
+            medianArea: Math.round(scoreInfo.medianArea),
+            commentRatio: Number(scoreInfo.commentRatio.toFixed(2)),
+            squareRatio: Number(scoreInfo.squareRatio.toFixed(2)),
+            smallRatio: Number(scoreInfo.smallRatio.toFixed(2)),
+            dominantFolderCount: scoreInfo.folderStats.dominantCount,
+            dominantRatio: Number(scoreInfo.folderStats.dominantRatio.toFixed(2))
+          };
+        });
+      const selected = adapter.getDebugSelectedSource?.();
+      let currentRow = null;
+      if (selected?.items?.length) {
+        const selectedInfo = selected.scoreInfo ||
+          settings.scoreSourceItemList(selected.items, selected.sourceType || "selected");
+        currentRow = {
+          type: `current-selected:${selected.sourceType || "unknown"}`,
+          count: selected.items.length,
+          score: selectedInfo.score,
+          large: selectedInfo.largeCount,
+          medianArea: Math.round(selectedInfo.medianArea),
+          commentRatio: Number(selectedInfo.commentRatio.toFixed(2)),
+          squareRatio: Number(selectedInfo.squareRatio.toFixed(2)),
+          smallRatio: Number(selectedInfo.smallRatio.toFixed(2)),
+          dominantFolderCount: selectedInfo.folderStats.dominantCount,
+          dominantRatio: Number(selectedInfo.folderStats.dominantRatio.toFixed(2))
+        };
+      }
+      const rows = currentRow ? [currentRow, ...candidateRows] : candidateRows;
+
+      console.log("[dcmv] generic score current", currentRow || null);
+      console.log("[dcmv] generic score candidates", candidateRows);
+      console.table(rows);
+      console.log("[dcmv] generic score all", rows);
+      console.log("[dcmv] generic score winner", rows.slice().sort((a, b) => b.score - a.score)[0] || null);
+    });
+  }
 })();
 

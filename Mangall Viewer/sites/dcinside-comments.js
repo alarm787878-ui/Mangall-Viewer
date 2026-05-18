@@ -662,8 +662,14 @@
       panel.classList.contains("dcmv-dc-comment-panel-empty") ||
       panel.classList.contains("dcmv-dc-comment-panel-collapsed-empty")
     ) {
-      // empty 상태로 돌아오면 눈 버튼 반드시 제거
-      panel.querySelector(".dcmv-dc-comment-eye-btn")?.remove();
+      const actionBox = button.closest(".dcmv-dc-comment-action-box");
+      if (actionBox instanceof HTMLElement) {
+        Array.from(actionBox.children).forEach((child) => {
+          if (child !== button) {
+            child.remove();
+          }
+        });
+      }
 
       button.textContent = "댓글";
       if (icon instanceof HTMLElement) {
