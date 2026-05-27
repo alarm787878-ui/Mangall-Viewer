@@ -129,6 +129,11 @@
     if (message.type !== "DCMV_OPEN") return;
 
     const wasAlreadyFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    const existing = document.getElementById(OVERLAY_ID);
+    if (existing) {
+      closeViewer();
+      return;
+    }
 
     // 만약 툴바나 메뉴를 통해 열린 것이라면, 비동기 로직(openViewer)에 진입하기 전에 
     // 즉시 전체화면을 요청하여 사용자 제스처(Transient Activation) 소실을 방지합니다.
