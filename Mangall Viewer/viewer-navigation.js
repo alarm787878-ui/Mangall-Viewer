@@ -3,6 +3,26 @@
 
   modules.navigation = {
     bindEvents(targetState, deps) {
+      const escHandler = (e) => {
+        if (!deps.getState()) return;
+
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          deps.closeViewer();
+        }
+      };
+
+      const escKeyupHandler = (e) => {
+        if (!deps.getState()) return;
+
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          deps.closeViewer();
+        }
+      };
+
       const keydown = (e) => {
         const state = deps.getState();
         if (!state) return;
@@ -100,6 +120,18 @@
         const state = deps.getState();
         if (!state) return;
 
+        const isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        if (!isFullscreen && state.ignoreNextFullscreenExitClose) {
+          state.ignoreNextFullscreenExitClose = false;
+        } else if (
+          !isFullscreen &&
+          state.autoFullscreen !== false &&
+          !state.wasAlreadyFullscreen
+        ) {
+          deps.closeViewer();
+          return;
+        }
+
         deps.refreshCurrentStepRenderBoxes?.();
         deps.syncHudTrigger();
         deps.syncImageLoadingBarPosition();
@@ -150,6 +182,7 @@
         } else if (action === "toggle-fullscreen") {
           actionEl.blur();
           if (document.fullscreenElement || document.webkitFullscreenElement) {
+            state.ignoreNextFullscreenExitClose = true;
             (document.exitFullscreen || document.webkitExitFullscreen)?.call(document).catch(() => {});
           } else {
             const el = document.documentElement;
@@ -241,6 +274,9 @@
             settingsSlider.classList.toggle("dcmv-settings-show-advanced");
           }
           actionEl.blur();
+        } else if (action === "open-extension-options") {
+          actionEl.blur();
+          chrome.runtime?.sendMessage?.({ type: "DCMV_OPEN_OPTIONS" });
         } else if (action === "reset-pairing-from-current") {
           const anchor = deps.getCurrentAnchorIndex();
           const resetIndex = Math.max(0, anchor);
@@ -316,6 +352,8 @@
       };
 
       targetState.handlers = {
+        escHandler,
+        escKeyupHandler,
         keydown,
         wheel,
         mousemove,
@@ -328,6 +366,8 @@
         imageClick
       };
 
+      window.addEventListener("keydown", escHandler, true);
+      window.addEventListener("keyup", escKeyupHandler, true);
       document.addEventListener("keydown", keydown, true);
       document.addEventListener("mousemove", mousemove, true);
       document.addEventListener("mouseleave", docMouseleave, true);

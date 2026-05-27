@@ -1,4 +1,4 @@
-﻿importScripts(
+importScripts(
   "site-registry.js",
   "sites/universal-site-settings.js",
   "sites/arca-live.js",
@@ -127,6 +127,18 @@ async function openViewerInTab(tabId, targetImageUrl = "", providedUrl = null) {
   });
 }
 
+function parseVersion(version) {
+  return String(version || "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function shouldOpenChangelog(previousVersion, currentVersion) {
+  const [prevMajor, prevMinor] = parseVersion(previousVersion);
+  const [currentMajor, currentMinor] = parseVersion(currentVersion);
+  return prevMajor !== currentMajor || prevMinor !== currentMinor;
+}
+
 function ensureDefaultSettings() {
   chrome.storage?.local?.get(Object.keys(DEFAULT_SETTINGS), (result) => {
     const missingSettings = {};
@@ -143,10 +155,19 @@ function ensureDefaultSettings() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   ensureDefaultSettings();
   await syncSiteRegistry();
   createContextMenu();
+
+  if (
+    details?.reason === "update" &&
+    shouldOpenChangelog(details.previousVersion, chrome.runtime.getManifest().version)
+  ) {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL("extension-settings.html#update-info")
+    });
+  }
 });
 
 chrome.runtime.onStartup.addListener(async () => {
@@ -200,6 +221,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         })
       );
     return true;
+  }
+
+  if (message.type === "DCMV_OPEN_OPTIONS") {
+    chrome.runtime.openOptionsPage();
+    sendResponse({ success: true });
+    return undefined;
   }
 
   return undefined;

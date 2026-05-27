@@ -285,6 +285,14 @@
         cornerCounterSwitch
       );
 
+      const openExtensionOptionsButton = button(
+        "dcmv-settings-item dcmv-settings-open-extension-options",
+        "open-extension-options"
+      );
+      openExtensionOptionsButton.append(
+        el("span", "dcmv-settings-item-label", "확장프로그램 옵션")
+      );
+
       // Back button at the bottom of advanced panel
       const backToBasicButton = button(
         "dcmv-settings-item dcmv-settings-back-to-basic",
@@ -292,7 +300,13 @@
       );
       backToBasicButton.append(el("span", "dcmv-settings-item-label", "기본 설정"));
 
-      advancedSettings.append(wasdButton, autoFirstPageButton, cornerCounterButton, backToBasicButton);
+      advancedSettings.append(
+        wasdButton,
+        autoFirstPageButton,
+        cornerCounterButton,
+        openExtensionOptionsButton,
+        backToBasicButton
+      );
 
       // Wrap both panels in a slider container for animation
       const settingsSlider = el("div", "dcmv-settings-slider");

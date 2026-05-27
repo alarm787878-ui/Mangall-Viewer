@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "만갤 뷰어 - dcinside Image Viewer",
-  "version": "1.4.6",
-  "description": "디시인사이드에서 이미지를 양면 전체화면으로 편하게 볼 수 있는 뷰어입니다.",
+  "version": "1.5.1",
+  "description": "디시인사이드를 비롯한 웹사이트에서 이미지를 양면 전체화면으로 편하게 볼 수 있는 뷰어입니다.",
   "permissions": [
     "contextMenus",
     "activeTab",
@@ -19,6 +19,14 @@
   "options_ui": {
     "page": "extension-settings.html",
     "open_in_tab": true
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E"
+      },
+      "description": "만갤 뷰어 열기"
+    }
   },
   "action": {
     "default_title": "만갤 뷰어",

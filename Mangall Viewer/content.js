@@ -493,6 +493,8 @@
     clearRepairTimers(prevState);
 
     document.removeEventListener("keydown", prevState.handlers.keydown, true);
+    window.removeEventListener("keydown", prevState.handlers.escHandler, true);
+    window.removeEventListener("keyup", prevState.handlers.escKeyupHandler, true);
     document.removeEventListener("mousemove", prevState.handlers.mousemove, true);
     document.removeEventListener(
       "mouseleave",
