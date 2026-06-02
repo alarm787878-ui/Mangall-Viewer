@@ -172,7 +172,12 @@
         const saved = raw ? JSON.parse(raw) : null;
         if (!saved) return null;
         const currentPageKey = `${location.origin}${location.pathname}${location.search}`;
-        return saved.pageKey === currentPageKey ? saved : null;
+        if (saved.pageKey !== currentPageKey) {
+          // 다른 회차로 이동한 뒤 예전 회차 기록이 되살아나지 않도록 바로 지운다.
+          window.sessionStorage.removeItem(pageSessionKey);
+          return null;
+        }
+        return saved;
       } catch {
         return null;
       }

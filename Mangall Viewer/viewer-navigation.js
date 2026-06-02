@@ -4,9 +4,11 @@
   modules.navigation = {
     bindEvents(targetState, deps) {
       const escHandler = (e) => {
-        if (!deps.getState()) return;
+        const state = deps.getState();
+        if (!state) return;
 
         if (e.key === "Escape") {
+          state.lastEscapeKeyAt = Date.now();
           e.preventDefault();
           e.stopPropagation();
           deps.closeViewer();
@@ -14,13 +16,22 @@
       };
 
       const escKeyupHandler = (e) => {
-        if (!deps.getState()) return;
+        const state = deps.getState();
+        if (!state) return;
 
         if (e.key === "Escape") {
+          state.lastEscapeKeyAt = Date.now();
           e.preventDefault();
           e.stopPropagation();
           deps.closeViewer();
         }
+      };
+
+      const markFullscreenExitGestureIntent = () => {
+        const state = deps.getState();
+        if (!state) return;
+        if (!(document.fullscreenElement || document.webkitFullscreenElement)) return;
+        state.lastFullscreenExitGestureAt = Date.now();
       };
 
       const keydown = (e) => {
@@ -128,8 +139,16 @@
           state.autoFullscreen !== false &&
           !state.wasAlreadyFullscreen
         ) {
-          deps.closeViewer();
-          return;
+          const now = Date.now();
+          const escapedRecently = now - (state.lastEscapeKeyAt || 0) < 1500;
+          const gestureRecently = now - (state.lastFullscreenExitGestureAt || 0) < 1500;
+
+          // 브라우저가 전체화면 ESC를 먼저 먹으면 keydown이 안 올 수 있다.
+          // 최근 포인터/터치 입력이 없던 전체화면 해제만 ESC로 보고 뷰어까지 닫는다.
+          if (escapedRecently || !gestureRecently) {
+            deps.closeViewer();
+            return;
+          }
         }
 
         deps.refreshCurrentStepRenderBoxes?.();
@@ -360,6 +379,7 @@
         docMouseleave,
         resize,
         fullscreenchange,
+        markFullscreenExitGestureIntent,
         hudMouseenter,
         hudMouseleave,
         click,
@@ -373,6 +393,9 @@
       document.addEventListener("mouseleave", docMouseleave, true);
       window.addEventListener("resize", resize, true);
       document.addEventListener("fullscreenchange", fullscreenchange, true);
+      window.addEventListener("pointerdown", markFullscreenExitGestureIntent, true);
+      window.addEventListener("touchstart", markFullscreenExitGestureIntent, true);
+      window.addEventListener("mousedown", markFullscreenExitGestureIntent, true);
 
       targetState.overlay.addEventListener("wheel", wheel, { passive: false });
       targetState.overlay.addEventListener("click", click, true);

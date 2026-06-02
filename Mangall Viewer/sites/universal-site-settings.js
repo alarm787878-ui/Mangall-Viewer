@@ -1206,6 +1206,18 @@
       const normalizedPattern = this.normalizeUrlPatternInput(site.urlPattern || "");
       const universalSiteSettings = this;
       let previousSelectedSource = null;
+      let previousPageKey = "";
+
+      function getCurrentPageKey() {
+        return `${location.origin}${location.pathname}${location.search}`;
+      }
+
+      function resetPageScopedGenericCache() {
+        previousSelectedSource = null;
+        if (typeof window !== "undefined" && Array.isArray(window.__dcmvGenericObservedImageUrls)) {
+          window.__dcmvGenericObservedImageUrls.length = 0;
+        }
+      }
 
       function countContentImages(root) {
         if (!universalSiteSettings.isElementLike(root) && root !== document.body) {
@@ -1297,6 +1309,13 @@
           return fallbackRoot || doc.body;
         },
         async collectSourceItems(root, deps) {
+          const currentPageKey = getCurrentPageKey();
+          if (previousPageKey && previousPageKey !== currentPageKey) {
+            // SPA처럼 주소만 바뀌는 사이트에서는 이전 회차 이미지 후보가 남을 수 있어 초기화한다.
+            resetPageScopedGenericCache();
+          }
+          previousPageKey = currentPageKey;
+
           const candidates = [];
           const pushCandidate = (items, sourceType) => {
             if (!Array.isArray(items) || !items.length) return;

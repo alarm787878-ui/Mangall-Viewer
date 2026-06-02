@@ -69,6 +69,63 @@
   const VIEWER_DISPLAY_NAME = "만갤 뷰어";
   const CONTENT_INSTANCE_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let customAdaptersReadyPromise = null;
+  let lastKnownPageKey = getRawPageKey();
+
+  function getRawPageKey() {
+    return `${location.origin}${location.pathname}${location.search}`;
+  }
+
+  function clearPageScopedSessionCache() {
+    for (const key of [
+      PAGE_SESSION_KEY,
+      FIRST_PAGE_AUTO_SESSION_KEY,
+      REOPENED_VIEWER_PAGE_SESSION_KEY,
+      MANUAL_PAIRING_RESET_SESSION_KEY
+    ]) {
+      try {
+        window.sessionStorage.removeItem(key);
+      } catch {
+      }
+    }
+
+    reopenedViewerPageKey = "";
+    hasAutoLazyWakeRunInThisTabPage = false;
+  }
+
+  function handlePageKeyChange() {
+    const currentPageKey = getRawPageKey();
+    if (lastKnownPageKey && lastKnownPageKey !== currentPageKey) {
+      // 새 회차로 주소가 바뀌면 이전 회차의 탭 임시 기록을 버린다.
+      clearPageScopedSessionCache();
+    }
+    lastKnownPageKey = currentPageKey;
+  }
+
+  function installPageKeyChangeWatcher() {
+    if (window.__dcmvPageKeyChangeWatcherInstalled) return;
+    window.__dcmvPageKeyChangeWatcherInstalled = true;
+
+    const scheduleCheck = () => {
+      setTimeout(handlePageKeyChange, 0);
+    };
+
+    for (const methodName of ["pushState", "replaceState"]) {
+      const original = history[methodName];
+      if (typeof original !== "function") continue;
+
+      history[methodName] = function (...args) {
+        const result = original.apply(this, args);
+        scheduleCheck();
+        return result;
+      };
+    }
+
+    window.addEventListener("popstate", scheduleCheck, true);
+    window.addEventListener("hashchange", scheduleCheck, true);
+    window.setInterval(handlePageKeyChange, 1000);
+  }
+
+  installPageKeyChangeWatcher();
 
   function getCurrentSiteAdapter() {
     return siteRegistry.getSiteAdapterForUrl?.(location.href) || null;
@@ -209,6 +266,7 @@
   }
 
   async function openViewer(message = {}, wasAlreadyFullscreen = false) {
+    handlePageKeyChange();
     await ensureCustomAdaptersLoaded();
 
     const existing = document.getElementById(OVERLAY_ID);
@@ -510,6 +568,21 @@
     document.removeEventListener(
       "fullscreenchange",
       prevState.handlers.fullscreenchange,
+      true
+    );
+    window.removeEventListener(
+      "pointerdown",
+      prevState.handlers.markFullscreenExitGestureIntent,
+      true
+    );
+    window.removeEventListener(
+      "touchstart",
+      prevState.handlers.markFullscreenExitGestureIntent,
+      true
+    );
+    window.removeEventListener(
+      "mousedown",
+      prevState.handlers.markFullscreenExitGestureIntent,
       true
     );
 
@@ -1740,4 +1813,3 @@
   ensureCustomAdaptersLoaded().catch(() => {});
 
 })();
-
