@@ -16,8 +16,12 @@ const DEFAULT_SETTINGS = {
   autoFirstPageAdjust: false,
   showImageComments: false,
   alwaysShowComments: true,
-  showCornerPageCounter: false
+  showCornerPageCounter: false,
+  fullscreenShortcut: "f",
+  spreadShortcut: "",
+  resetPairingShortcut: "r"
 };
+const INITIAL_HUD_GUIDE_STORAGE_KEY = "shouldShowInitialHudGuide";
 
 async function syncSiteRegistry() {
   const universalSettings = globalThis.__dcmvModules?.universalSiteSettings;
@@ -157,6 +161,9 @@ function ensureDefaultSettings() {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   ensureDefaultSettings();
+  if (details?.reason === "install") {
+    chrome.storage?.local?.set({ [INITIAL_HUD_GUIDE_STORAGE_KEY]: true });
+  }
   await syncSiteRegistry();
   createContextMenu();
 
@@ -231,4 +238,3 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return undefined;
 });
-

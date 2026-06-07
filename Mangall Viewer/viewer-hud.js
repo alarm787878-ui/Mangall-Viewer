@@ -43,6 +43,10 @@
       trigger.style.height = `${triggerHeight}px`;
 
       if (targetState.lastPointerX == null || targetState.lastPointerY == null) {
+        if (isSettingsUpdateNoticeVisible(targetState)) {
+          targetState.hud.classList.add(deps.hudVisibleClass);
+          clearTimeout(targetState.hudHideTimer);
+        }
         return;
       }
 
@@ -52,7 +56,7 @@
       );
       targetState.isPointerOverHudZone = inside;
 
-      if (inside) {
+      if (inside || isSettingsUpdateNoticeVisible(targetState)) {
         targetState.hud.classList.add(deps.hudVisibleClass);
         clearTimeout(targetState.hudHideTimer);
       }
@@ -71,7 +75,8 @@
       const shouldShow =
         !!targetState.isPointerOverHudZone ||
         !!targetState.isPagePickerOpen ||
-        !!targetState.isSettingsMenuOpen;
+        !!targetState.isSettingsMenuOpen ||
+        isSettingsUpdateNoticeVisible(targetState);
 
       targetState.hud.classList.toggle(deps.hudVisibleClass, shouldShow);
     },
@@ -105,6 +110,10 @@
     showHudTemporarily(targetState, deps) {
       if (!targetState) return;
       targetState.hud.classList.add(deps.hudVisibleClass);
+      clearTimeout(targetState.hudHideTimer);
+      targetState.hudHideTimer = setTimeout(() => {
+        deps.syncHudVisibility?.();
+      }, deps.hudInitialShowDelay);
     },
 
     showEdgeToast(targetState, message, durationMs, options = {}) {
@@ -137,7 +146,8 @@
         if (
           targetState.isPointerOverHudZone ||
           targetState.isPagePickerOpen ||
-          targetState.isSettingsMenuOpen
+          targetState.isSettingsMenuOpen ||
+          isSettingsUpdateNoticeVisible(targetState)
         ) {
           return;
         }
@@ -178,4 +188,13 @@
       );
     }
   };
+
+  function isSettingsUpdateNoticeVisible(targetState) {
+    return !!(
+      targetState?.settingsUpdateNotice &&
+      !targetState.settingsUpdateNotice.classList.contains(
+        "dcmv-settings-update-notice-hidden"
+      )
+    );
+  }
 })();

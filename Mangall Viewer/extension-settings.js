@@ -7,11 +7,42 @@ const customSitesList = document.getElementById("custom_sites_list");
 const statusMessage = document.getElementById("status_message");
 const openShortcutsBtn = document.getElementById("open_shortcuts_btn");
 const openShortcutsButtons = document.querySelectorAll("[data-open-shortcuts]");
+const useWasdToggle = document.getElementById("use_wasd_toggle");
+const shortcutStatus = document.getElementById("shortcut_status");
+const fullscreenShortcutBtn = document.getElementById("fullscreen_shortcut_btn");
+const spreadShortcutBtn = document.getElementById("spread_shortcut_btn");
+const resetPairingShortcutBtn = document.getElementById("reset_pairing_shortcut_btn");
+const nextArrowShortcut = document.getElementById("next_arrow_shortcut");
+const prevArrowShortcut = document.getElementById("prev_arrow_shortcut");
+const wasdConflictNote = document.getElementById("wasd_conflict_note");
 const tabButtons = document.querySelectorAll("[data-tab-target]");
 const tabPanels = document.querySelectorAll("[data-tab-panel]");
 const RELOAD_CUSTOM_SITES_MESSAGE = "DCMV_RELOAD_CUSTOM_SITES";
+const SHORTCUT_DEFAULTS = {
+  useWasd: true,
+  fullscreenShortcut: "f",
+  spreadShortcut: "",
+  resetPairingShortcut: "r"
+};
+const SHORTCUT_DISPLAY_DEFAULTS = {
+  readingDirectionRTL: true,
+  ...SHORTCUT_DEFAULTS
+};
+const BASIC_VIEWER_SHORTCUTS = [
+  "escape",
+  "space",
+  "shift+space",
+  "arrowup",
+  "arrowdown",
+  "arrowleft",
+  "arrowright",
+  "enter"
+];
+const WASD_VIEWER_SHORTCUTS = ["w", "a", "s", "d"];
 
 const universalSiteSettings = globalThis.__dcmvModules?.universalSiteSettings;
+let shortcutSettings = { ...SHORTCUT_DISPLAY_DEFAULTS };
+let recordingShortcutField = "";
 
 function escapeHtml(text) {
   const div = document.createElement("div");
@@ -25,6 +56,14 @@ function setStatus(message, type = "") {
   statusMessage.textContent = message || "";
   statusMessage.classList.toggle("is_error", type === "error");
   statusMessage.classList.toggle("is_success", type === "success");
+}
+
+function setShortcutStatus(message, type = "") {
+  if (!shortcutStatus) return;
+
+  shortcutStatus.textContent = message || "";
+  shortcutStatus.classList.toggle("is_error", type === "error");
+  shortcutStatus.classList.toggle("is_success", type === "success");
 }
 
 function activateTab(tabName) {
@@ -93,6 +132,212 @@ async function notifyCustomSiteChange() {
     void chrome.runtime.lastError;
     return false;
   }
+}
+
+function getStorageArea() {
+  return chrome.storage?.local || null;
+}
+
+function loadShortcutSettings() {
+  return new Promise((resolve) => {
+    const storageArea = getStorageArea();
+    if (!storageArea) {
+      resolve({ ...SHORTCUT_DISPLAY_DEFAULTS });
+      return;
+    }
+
+    storageArea.get(Object.keys(SHORTCUT_DISPLAY_DEFAULTS), (result) => {
+      resolve({
+        useWasd:
+          result?.useWasd === undefined ? SHORTCUT_DEFAULTS.useWasd : !!result.useWasd,
+        readingDirectionRTL:
+          result?.readingDirectionRTL === undefined
+            ? SHORTCUT_DISPLAY_DEFAULTS.readingDirectionRTL
+            : !!result.readingDirectionRTL,
+        fullscreenShortcut:
+          typeof result?.fullscreenShortcut === "string"
+            ? result.fullscreenShortcut
+            : SHORTCUT_DEFAULTS.fullscreenShortcut,
+        spreadShortcut:
+          typeof result?.spreadShortcut === "string"
+            ? result.spreadShortcut
+            : SHORTCUT_DEFAULTS.spreadShortcut,
+        resetPairingShortcut:
+          typeof result?.resetPairingShortcut === "string"
+            ? result.resetPairingShortcut
+            : SHORTCUT_DEFAULTS.resetPairingShortcut
+      });
+    });
+  });
+}
+
+function saveShortcutSettings(nextSettings) {
+  return new Promise((resolve) => {
+    const storageArea = getStorageArea();
+    if (!storageArea) {
+      resolve();
+      return;
+    }
+
+    const shortcutPatch = {};
+    for (const [field, value] of Object.entries(nextSettings)) {
+      if (field in SHORTCUT_DEFAULTS) {
+        shortcutPatch[field] = value;
+      }
+    }
+
+    if (!Object.keys(shortcutPatch).length) {
+      resolve();
+      return;
+    }
+
+    storageArea.set(shortcutPatch, () => resolve());
+  });
+}
+
+async function notifyViewerShortcutSettings() {
+  if (!chrome.tabs?.query || !chrome.tabs?.sendMessage) return;
+
+  try {
+    const tabs = await chrome.tabs.query({});
+    await Promise.all(
+      tabs.map((tab) => {
+        if (!tab.id) return Promise.resolve();
+        return chrome.tabs
+          .sendMessage(tab.id, {
+            type: "DCMV_UPDATE_SETTINGS",
+          useWasd: shortcutSettings.useWasd,
+          fullscreenShortcut: shortcutSettings.fullscreenShortcut,
+          spreadShortcut: shortcutSettings.spreadShortcut,
+          resetPairingShortcut: shortcutSettings.resetPairingShortcut
+          })
+          .catch(() => {});
+      })
+    );
+  } catch (_) {
+    void chrome.runtime?.lastError;
+  }
+}
+
+function formatShortcutKey(shortcut) {
+  if (!shortcut) return "사용 안 함";
+  return shortcut.split("+").map(formatShortcutPart).join(" + ");
+}
+
+function formatShortcutPart(part) {
+  if (part === "ctrl") return "Ctrl";
+  if (part === "alt") return "Alt";
+  if (part === "shift") return "Shift";
+  if (part === "meta") return "Meta";
+  if (part === "space") return "Space";
+  if (part === "arrowleft") return "←";
+  if (part === "arrowright") return "→";
+  if (part === "arrowup") return "↑";
+  if (part === "arrowdown") return "↓";
+  if (part.length === 1) return part.toUpperCase();
+  return part
+    .split("")
+    .map((char, index) => (index === 0 ? char.toUpperCase() : char))
+    .join("");
+}
+
+function normalizeShortcutEvent(event) {
+  const key = String(event.key || "");
+  if (!key) return "";
+  if (["Control", "Alt", "Shift", "Meta"].includes(key)) return "";
+
+  const parts = [];
+  if (event.ctrlKey) parts.push("ctrl");
+  if (event.altKey) parts.push("alt");
+  if (event.shiftKey) parts.push("shift");
+  if (event.metaKey) parts.push("meta");
+
+  if (key.length === 1) parts.push(key.toLowerCase());
+  else if (key === " " || key === "Spacebar") parts.push("space");
+  else parts.push(key.toLowerCase());
+
+  return parts.join("+");
+}
+
+function isBasicViewerShortcut(shortcut) {
+  if (BASIC_VIEWER_SHORTCUTS.includes(shortcut)) return true;
+
+  // 방향키는 Shift와 같이 눌러도 현재 뷰어 이동 단축키로 동작한다.
+  if (shortcut.startsWith("shift+")) {
+    return BASIC_VIEWER_SHORTCUTS.includes(shortcut.replace(/^shift\+/, ""));
+  }
+
+  return false;
+}
+
+function isWasdViewerShortcut(shortcut) {
+  if (WASD_VIEWER_SHORTCUTS.includes(shortcut)) return true;
+
+  // Shift+W/A/S/D도 현재 뷰어에서는 WASD 이동처럼 처리된다.
+  if (shortcut.startsWith("shift+")) {
+    return WASD_VIEWER_SHORTCUTS.includes(shortcut.replace(/^shift\+/, ""));
+  }
+
+  return false;
+}
+
+function renderShortcutSettings() {
+  if (useWasdToggle) {
+    useWasdToggle.setAttribute("aria-pressed", shortcutSettings.useWasd ? "true" : "false");
+  }
+
+  const fullscreenLabel = formatShortcutKey(shortcutSettings.fullscreenShortcut);
+  const spreadLabel = formatShortcutKey(shortcutSettings.spreadShortcut);
+  const resetPairingLabel = formatShortcutKey(shortcutSettings.resetPairingShortcut);
+
+  if (fullscreenShortcutBtn) fullscreenShortcutBtn.textContent = fullscreenLabel;
+  if (spreadShortcutBtn) spreadShortcutBtn.textContent = spreadLabel;
+  if (resetPairingShortcutBtn) resetPairingShortcutBtn.textContent = resetPairingLabel;
+
+  if (wasdConflictNote) {
+    wasdConflictNote.hidden = !(
+      shortcutSettings.useWasd &&
+      (
+        isWasdViewerShortcut(shortcutSettings.fullscreenShortcut) ||
+        isWasdViewerShortcut(shortcutSettings.spreadShortcut) ||
+        isWasdViewerShortcut(shortcutSettings.resetPairingShortcut)
+      )
+    );
+  }
+
+  if (nextArrowShortcut) {
+    nextArrowShortcut.textContent = shortcutSettings.readingDirectionRTL ? "←" : "→";
+  }
+  if (prevArrowShortcut) {
+    prevArrowShortcut.textContent = shortcutSettings.readingDirectionRTL ? "→" : "←";
+  }
+}
+
+async function updateShortcutSettings(patch) {
+  shortcutSettings = { ...shortcutSettings, ...patch };
+  await saveShortcutSettings(patch);
+  renderShortcutSettings();
+  await notifyViewerShortcutSettings();
+  setShortcutStatus("단축키 설정을 저장했습니다.", "success");
+}
+
+function startShortcutRecording(field) {
+  recordingShortcutField = field;
+  document.querySelectorAll("[data-shortcut-target]").forEach((button) => {
+    button.classList.toggle("is_recording", button.dataset.shortcutTarget === field);
+    if (button.dataset.shortcutTarget === field) {
+      button.textContent = "입력 중";
+    }
+  });
+  setShortcutStatus("변경할 키를 누르세요. Esc를 누르면 취소됩니다.");
+}
+
+function stopShortcutRecording() {
+  recordingShortcutField = "";
+  document.querySelectorAll("[data-shortcut-target]").forEach((button) => {
+    button.classList.remove("is_recording");
+  });
+  renderShortcutSettings();
 }
 
 async function renderCustomSites() {
@@ -236,9 +481,78 @@ openShortcutsButtons.forEach((button) => {
   button.addEventListener("click", openShortcutSettings);
 });
 
+useWasdToggle?.addEventListener("click", async () => {
+  await updateShortcutSettings({ useWasd: !shortcutSettings.useWasd });
+});
+
+document.querySelectorAll("[data-shortcut-target]").forEach((button) => {
+  button.addEventListener("click", () => {
+    startShortcutRecording(button.dataset.shortcutTarget || "");
+  });
+});
+
+document.querySelectorAll("[data-reset-shortcut]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const field = button.dataset.resetShortcut || "";
+    if (!field || !(field in SHORTCUT_DEFAULTS)) return;
+    await updateShortcutSettings({ [field]: SHORTCUT_DEFAULTS[field] });
+  });
+});
+
+document.querySelectorAll("[data-clear-shortcut]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const field = button.dataset.clearShortcut || "";
+    if (!field || !(field in SHORTCUT_DEFAULTS)) return;
+    await updateShortcutSettings({ [field]: "" });
+  });
+});
+
+document.addEventListener("keydown", async (event) => {
+  if (!recordingShortcutField) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+    stopShortcutRecording();
+    setShortcutStatus("단축키 변경을 취소했습니다.");
+    return;
+  }
+
+  const shortcut = normalizeShortcutEvent(event);
+  if (!shortcut) {
+    setShortcutStatus("기능키만 단독으로는 사용할 수 없습니다.", "error");
+    return;
+  }
+
+  const otherField =
+    recordingShortcutField === "fullscreenShortcut"
+      ? ["spreadShortcut", "resetPairingShortcut"]
+      : recordingShortcutField === "spreadShortcut"
+        ? ["fullscreenShortcut", "resetPairingShortcut"]
+        : ["fullscreenShortcut", "spreadShortcut"];
+
+  if (otherField.some((field) => shortcutSettings[field] === shortcut)) {
+    setShortcutStatus("이미 다른 기능에서 사용 중인 키입니다.", "error");
+    return;
+  }
+
+  if (isBasicViewerShortcut(shortcut)) {
+    setShortcutStatus("기본 단축키와 겹쳐서 사용할 수 없습니다.", "error");
+    return;
+  }
+
+  const field = recordingShortcutField;
+  stopShortcutRecording();
+  await updateShortcutSettings({ [field]: shortcut });
+});
+
 activateTab(getInitialTabName());
 
 (async () => {
+  shortcutSettings = await loadShortcutSettings();
+  renderShortcutSettings();
+
   if (!universalSiteSettings) {
     setStatus("설정을 불러오지 못했습니다.", "error");
     return;
@@ -246,4 +560,3 @@ activateTab(getInitialTabName());
 
   await renderCustomSites();
 })();
-

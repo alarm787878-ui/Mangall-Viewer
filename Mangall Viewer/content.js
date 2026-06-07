@@ -22,11 +22,16 @@
     alwaysShowComments: "alwaysShowComments",
     autoFullscreen: "autoFullscreen",
     forceBelowMode: "forceBelowMode",
-    showCornerPageCounter: "showCornerPageCounter"
+    showCornerPageCounter: "showCornerPageCounter",
+    fullscreenShortcut: "fullscreenShortcut",
+    spreadShortcut: "spreadShortcut",
+    resetPairingShortcut: "resetPairingShortcut",
+    shouldShowInitialHudGuide: "shouldShowInitialHudGuide",
+    settingsUpdateNoticeSeenKey: "settingsUpdateNoticeSeenKey"
   };
 
   const HUD_HIDE_DELAY = 180;
-  const HUD_INITIAL_SHOW_DELAY = 500;
+  const HUD_INITIAL_SHOW_DELAY = 1000;
   const NAV_THROTTLE_MS = 220;
   const HUD_TRIGGER_MARGIN_X = 28;
   const HUD_TRIGGER_MARGIN_Y = 20;
@@ -178,6 +183,18 @@
           message.autoFirstPageAdjust === undefined
             ? state.autoFirstPageAdjust
             : !!message.autoFirstPageAdjust;
+        state.fullscreenShortcut =
+          message.fullscreenShortcut === undefined
+            ? state.fullscreenShortcut
+            : String(message.fullscreenShortcut || "");
+        state.spreadShortcut =
+          message.spreadShortcut === undefined
+            ? state.spreadShortcut
+            : String(message.spreadShortcut || "");
+        state.resetPairingShortcut =
+          message.resetPairingShortcut === undefined
+            ? state.resetPairingShortcut
+            : String(message.resetPairingShortcut || "");
         syncToggleVisuals();
       }
       return;
@@ -337,6 +354,7 @@
       pagePickerList: overlay.querySelector(".dcmv-page-picker-list"),
       settingsMenu: overlay.querySelector(".dcmv-settings-menu"),
       settingsButton: overlay.querySelector(".dcmv-settings-btn"),
+      settingsUpdateNotice: overlay.querySelector(".dcmv-settings-update-notice"),
       settingsUseWasdButton: overlay.querySelector(".dcmv-settings-use-wasd"),
       settingsUseWasdSwitch: overlay.querySelector(
         ".dcmv-settings-use-wasd-switch"
@@ -388,6 +406,18 @@
           ? true
           : !!settings.readingDirectionRTL,
       useWasd: settings.useWasd === undefined ? true : !!settings.useWasd,
+      fullscreenShortcut:
+        typeof settings.fullscreenShortcut === "string"
+          ? settings.fullscreenShortcut
+          : "f",
+      spreadShortcut:
+        typeof settings.spreadShortcut === "string"
+          ? settings.spreadShortcut
+          : "",
+      resetPairingShortcut:
+        typeof settings.resetPairingShortcut === "string"
+          ? settings.resetPairingShortcut
+          : "r",
       autoFirstPageAdjust:
         settings.autoFirstPageAdjust === undefined
           ? false
@@ -443,6 +473,7 @@
       wasAlreadyFullscreen: wasAlreadyFullscreen,
       repairTimers: [],
       isRepairRunning: false,
+      shouldShowInitialHudGuide: false,
       handlers: {},
       requestedTargetUrl: runtimeModules.pageLoading?.normalizeComparableUrl
         ? runtimeModules.pageLoading.normalizeComparableUrl(
@@ -496,6 +527,8 @@
     }
 
     syncToggleVisuals();
+    await prepareSettingsUpdateNotice();
+    await prepareInitialHudGuide();
     bindEvents();
 
 
@@ -554,6 +587,7 @@
     clearTimeout(prevState.cursorHideTimer);
     clearTimeout(prevState.edgeToastTimer);
     clearRepairTimers(prevState);
+    markSettingsUpdateNoticeSeen();
 
     document.removeEventListener("keydown", prevState.handlers.keydown, true);
     window.removeEventListener("keydown", prevState.handlers.escHandler, true);
@@ -595,6 +629,10 @@
     );
     prevState.hud.removeEventListener("mouseenter", prevState.handlers.hudMouseenter);
     prevState.hud.removeEventListener("mouseleave", prevState.handlers.hudMouseleave);
+    prevState.settingsButton?.removeEventListener(
+      "mouseleave",
+      prevState.handlers.settingsNoticeMouseleave
+    );
 
     if (prevState.overlay?.parentNode) {
       prevState.overlay.remove();
@@ -667,6 +705,7 @@
       goNext,
       goPrev,
       isPointerInsideHudTrigger,
+      syncHudVisibility,
       updateHudHoverState,
       showCursor,
       hasPointerMovedSignificantly,
@@ -691,6 +730,9 @@
         spreadEnabled: state.spreadEnabled,
         firstPageSingle: state.firstPageSingle,
         useWasd: state.useWasd,
+        fullscreenShortcut: state.fullscreenShortcut,
+        spreadShortcut: state.spreadShortcut,
+        resetPairingShortcut: state.resetPairingShortcut,
         autoFirstPageAdjust: state.autoFirstPageAdjust,
         showImageComments: state.showImageComments,
         alwaysShowComments: state.alwaysShowComments,
@@ -706,10 +748,100 @@
       syncManualResetClearVisibility,
       showEdgeToast,
       clearSavedManualPairingResetIndices,
+      markSettingsUpdateNoticeSeen,
       goToPageIndex,
       getLogicalNavigationForViewportSide,
       syncDcImageCommentsForViewer
     });
+  }
+
+  function getStorageArea() {
+    return runtimeModules.settings?.getStorageArea?.() ?? null;
+  }
+
+  function getStorageValue(key) {
+    return new Promise((resolve) => {
+      const storageArea = getStorageArea();
+      if (!storageArea) {
+        resolve(undefined);
+        return;
+      }
+
+      storageArea.get([key], (result) => {
+        resolve(result?.[key]);
+      });
+    });
+  }
+
+  function setStorageValue(key, value) {
+    return new Promise((resolve) => {
+      const storageArea = getStorageArea();
+      if (!storageArea) {
+        resolve();
+        return;
+      }
+
+      storageArea.set({ [key]: value }, () => resolve());
+    });
+  }
+
+  async function prepareSettingsUpdateNotice() {
+    const notice = state?.settingsUpdateNotice;
+    if (!notice) return;
+    state.settingsUpdateNoticeSeenKey = "";
+
+    const noticeMessage = notice.textContent.trim();
+    const noticeVersion = notice.dataset.noticeVersion || "";
+    const currentVersion = getCurrentExtensionVersion();
+
+    if (!noticeVersion || !noticeMessage || noticeVersion !== currentVersion) {
+      notice.classList.add("dcmv-settings-update-notice-hidden");
+      return;
+    }
+
+    const storageKey = STORAGE_KEYS.settingsUpdateNoticeSeenKey;
+    const noticeKey = `${noticeVersion}|${noticeMessage}`;
+    const seenNoticeKey = await getStorageValue(storageKey);
+    if (seenNoticeKey === noticeKey) {
+      notice.classList.add("dcmv-settings-update-notice-hidden");
+      return;
+    }
+
+    state.settingsUpdateNoticeSeenKey = noticeKey;
+    notice.classList.remove("dcmv-settings-update-notice-hidden");
+  }
+
+  function markSettingsUpdateNoticeSeen() {
+    const notice = state?.settingsUpdateNotice;
+    const noticeKey = state?.settingsUpdateNoticeSeenKey;
+    if (!notice || !noticeKey) return Promise.resolve();
+    if (notice.classList.contains("dcmv-settings-update-notice-hidden")) {
+      return Promise.resolve();
+    }
+
+    // 실제로 말풍선이 사라지는 시점에만 "봤음"으로 저장한다.
+    state.settingsUpdateNoticeSeenKey = "";
+    return setStorageValue(STORAGE_KEYS.settingsUpdateNoticeSeenKey, noticeKey);
+  }
+
+  async function prepareInitialHudGuide() {
+    if (!state) return;
+
+    const storageKey = STORAGE_KEYS.shouldShowInitialHudGuide;
+    const shouldShow = await getStorageValue(storageKey);
+    state.shouldShowInitialHudGuide = shouldShow === true;
+
+    if (state.shouldShowInitialHudGuide) {
+      await setStorageValue(storageKey, false);
+    }
+  }
+
+  function getCurrentExtensionVersion() {
+    try {
+      return chrome.runtime?.getManifest?.().version || "";
+    } catch {
+      return "";
+    }
   }
 
   function setRefreshButtonState(isRunning) {
@@ -848,8 +980,12 @@
   }
 
   function showHudTemporarily() {
+    if (!state?.shouldShowInitialHudGuide) return;
+    state.shouldShowInitialHudGuide = false;
     runtimeModules.hud?.showHudTemporarily?.(state, {
-      hudVisibleClass: HUD_VISIBLE_CLASS
+      hudVisibleClass: HUD_VISIBLE_CLASS,
+      hudInitialShowDelay: HUD_INITIAL_SHOW_DELAY,
+      syncHudVisibility
     });
   }
 

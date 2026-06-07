@@ -1,5 +1,11 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
+  const UPDATE_NOTICE = {
+    // 이 버전에서만 업데이트 알림을 한 번 표시한다.
+    // 예: version을 "1.5.5"로 바꾸면 1.5.5에서만 이 문구가 뜬다.
+    version: "1.5.3",
+    message: "확장프로그램 옵션에서 단축키를 설정하실 수 있습니다."
+  };
 
   modules.ui = {
     buildOverlay(deps) {
@@ -162,6 +168,12 @@
       const settingsButton = button("dcmv-btn dcmv-settings-btn", "toggle-settings-menu");
       settingsButton.setAttribute("aria-label", "설정");
       settingsButton.appendChild(settingsGearIcon());
+      const settingsUpdateNotice = el(
+        "div",
+        "dcmv-settings-update-notice dcmv-settings-update-notice-hidden"
+      );
+      settingsUpdateNotice.dataset.noticeVersion = UPDATE_NOTICE.version;
+      settingsUpdateNotice.textContent = UPDATE_NOTICE.message;
 
       const settingsMenu = el("div", "dcmv-settings-menu");
 
@@ -313,7 +325,7 @@
       settingsSlider.append(basicSettings, advancedSettings);
 
       settingsMenu.append(settingsSlider);
-      settingsWrap.append(settingsButton, settingsMenu);
+      settingsWrap.append(settingsButton, settingsUpdateNotice, settingsMenu);
 
       const closeButton = button("dcmv-btn", "close", "닫기");
 

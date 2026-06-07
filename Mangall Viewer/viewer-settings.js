@@ -10,7 +10,10 @@
     alwaysShowComments: true,
     autoFullscreen: false,
     forceBelowMode: false,
-    showCornerPageCounter: false
+    showCornerPageCounter: false,
+    fullscreenShortcut: "f",
+    spreadShortcut: "",
+    resetPairingShortcut: "r"
   };
   const SETTING_FIELDS = [
     "readingDirectionRTL",
@@ -23,6 +26,11 @@
     "autoFullscreen",
     "forceBelowMode",
     "showCornerPageCounter"
+  ];
+  const TEXT_SETTING_FIELDS = [
+    "fullscreenShortcut",
+    "spreadShortcut",
+    "resetPairingShortcut"
   ];
 
   modules.settings = {
@@ -57,7 +65,10 @@
             storageKeys.alwaysShowComments,
             storageKeys.autoFullscreen,
             storageKeys.forceBelowMode,
-            storageKeys.showCornerPageCounter
+            storageKeys.showCornerPageCounter,
+            storageKeys.fullscreenShortcut,
+            storageKeys.spreadShortcut,
+            storageKeys.resetPairingShortcut
           ],
           (result) => {
             const nextSettings = {};
@@ -70,6 +81,16 @@
                 savedValue === undefined ? DEFAULT_SETTINGS[field] : !!savedValue;
 
               nextSettings[field] = nextValue;
+            }
+
+            for (const field of TEXT_SETTING_FIELDS) {
+              const storageKey = storageKeys[field];
+              if (!storageKey) continue;
+              const savedValue = result[storageKey];
+              nextSettings[field] =
+                typeof savedValue === "string"
+                  ? savedValue
+                  : DEFAULT_SETTINGS[field];
             }
 
             resolve(nextSettings);
@@ -93,7 +114,8 @@
           if (!storageKey) continue;
           // undefined가 아닌 값만 저장 (의도적인 삭제가 아닌 이상)
           if (value !== undefined) {
-            dataToSave[storageKey] = !!value;
+            dataToSave[storageKey] =
+              TEXT_SETTING_FIELDS.includes(field) ? String(value) : !!value;
           }
         }
 
@@ -123,6 +145,14 @@
           const value = settings[field];
           dataToSave[storageKey] =
             value === undefined ? DEFAULT_SETTINGS[field] : !!value;
+        }
+
+        for (const field of TEXT_SETTING_FIELDS) {
+          const storageKey = storageKeys[field];
+          if (!storageKey) continue;
+          const value = settings[field];
+          dataToSave[storageKey] =
+            typeof value === "string" ? value : DEFAULT_SETTINGS[field];
         }
 
         storageArea.set(dataToSave, () => resolve());
