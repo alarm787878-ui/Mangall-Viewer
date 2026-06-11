@@ -8,6 +8,7 @@
 
   const OVERLAY_ID = "dcmv-overlay";
   const LOCK_CLASS = "dcmv-lock-scroll";
+  const HIDE_SCROLLBAR_CLASS = "dcmv-hide-scrollbar";
   const HUD_VISIBLE_CLASS = "dcmv-hud-visible";
   const TOGGLE_ACTIVE_CLASS = "dcmv-toggle-active";
   const CURSOR_HIDDEN_CLASS = "dcmv-cursor-hidden";
@@ -339,6 +340,8 @@
 
     document.documentElement.classList.add(LOCK_CLASS);
     document.body.classList.add(LOCK_CLASS);
+    document.documentElement.classList.add(HIDE_SCROLLBAR_CLASS);
+    document.body.classList.add(HIDE_SCROLLBAR_CLASS);
 
     state = {
       root,
@@ -473,6 +476,7 @@
       wasAlreadyFullscreen: wasAlreadyFullscreen,
       repairTimers: [],
       isRepairRunning: false,
+      backgroundLazyWakeCount: 0,
       shouldShowInitialHudGuide: false,
       handlers: {},
       requestedTargetUrl: runtimeModules.pageLoading?.normalizeComparableUrl
@@ -561,6 +565,7 @@
     renderCurrentStep();
     syncHudTrigger();
     scheduleInitialPostLazyRefresh();
+    scheduleBackgroundRepair();
     rememberPointerPosition(window.innerWidth / 2, window.innerHeight / 2);
     scheduleCursorHide();
   }
@@ -640,6 +645,8 @@
 
     document.documentElement.classList.remove(LOCK_CLASS);
     document.body.classList.remove(LOCK_CLASS);
+    document.documentElement.classList.remove(HIDE_SCROLLBAR_CLASS);
+    document.body.classList.remove(HIDE_SCROLLBAR_CLASS);
 
     state = null;
 

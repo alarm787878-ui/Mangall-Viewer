@@ -520,6 +520,24 @@
       return longSide < MIN_CONTENT_IMAGE_LONG_SIDE || area < MIN_CONTENT_IMAGE_AREA;
     },
 
+    isLikelyClickableBannerImage(imgEl) {
+      if (!this.isElementLike(imgEl)) return false;
+
+      const clickable = imgEl.closest(
+        "button, [role='button'], [onclick], [data-url], [data-href], [data-link], [data-target], [data-click], [data-bs]"
+      );
+      if (!clickable) return false;
+
+      const { width, height } = this.getKnownImageSize(imgEl);
+      if (!width || !height) return false;
+
+      const ratio = width / height;
+      const area = width * height;
+
+      // 진단 결과의 광고처럼 클릭 가능한 버튼 안의 낮고 긴 배너만 제외한다.
+      return ratio >= 3 && height <= 320 && area >= MIN_CONTENT_IMAGE_AREA;
+    },
+
     getLoadedCurrentImageUrl(imgEl, deps) {
       if (!this.isImageElementLike(imgEl)) return "";
 
@@ -579,6 +597,31 @@
       return (items || []).map((item) => ({
         ...item,
         __dcmvGenericSourceType: sourceType
+      }));
+    },
+
+    dedupeGenericSourceItems(items) {
+      const deduped = [];
+      const seen = new Set();
+
+      for (const item of items || []) {
+        const key = this.normalizeImageUrl(
+          item?.src || item?.resolvedSrc || item?.originalPopUrl || ""
+        );
+        if (key && seen.has(key)) {
+          continue;
+        }
+        if (key) {
+          seen.add(key);
+        }
+        deduped.push(item);
+      }
+
+      // 중복 제거 후 페이지 번호가 비지 않도록 다시 매긴다.
+      return deduped.map((item, index) => ({
+        ...item,
+        index,
+        displayIndex: index + 1
       }));
     },
 
@@ -883,6 +926,10 @@
         );
         const contentKey = url || anchorHref;
 
+        if (this.isLikelyClickableBannerImage(imgEl)) {
+          continue;
+        }
+
         if (!this.shouldTreatAsContentImageElement(imgEl, contentKey)) {
           continue;
         }
@@ -1064,9 +1111,10 @@
       const seen = new Set();
 
       const pushUrl = (value) => {
-        if (!this.shouldTreatAsContentImage(value) || seen.has(value)) return;
-        seen.add(value);
-        urls.push(value);
+        const url = this.normalizeImageUrl(value);
+        if (!this.shouldTreatAsContentImage(url) || seen.has(url)) return;
+        seen.add(url);
+        urls.push(url);
       };
 
       if (typeof window !== "undefined" && Array.isArray(window.__dcmvGenericObservedImageUrls)) {
@@ -1321,10 +1369,13 @@
             if (!Array.isArray(items) || !items.length) return;
 
             const typedItems = universalSiteSettings.withGenericSourceType(items, sourceType);
+            const dedupedItems = universalSiteSettings.dedupeGenericSourceItems(typedItems);
+            if (!dedupedItems.length) return;
+
             candidates.push({
-              items: typedItems,
+              items: dedupedItems,
               sourceType,
-              scoreInfo: universalSiteSettings.scoreSourceItemList(typedItems, sourceType)
+              scoreInfo: universalSiteSettings.scoreSourceItemList(dedupedItems, sourceType)
             });
           };
 
@@ -1441,4 +1492,3 @@
   };
 
 })();
-

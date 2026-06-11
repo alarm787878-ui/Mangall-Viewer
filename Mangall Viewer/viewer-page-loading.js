@@ -656,6 +656,9 @@
 
       const refreshResult = await deps.refreshSourceItemsFromDom();
       const previousCount = targetState.totalCount;
+      const anchorIndexBefore = deps.getCurrentAnchorIndex();
+      const stepIndexBefore = targetState.stepIndex;
+      const previousRenderUrls = deps.getCurrentStepRenderUrls();
       let didChange = false;
 
       deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
@@ -679,9 +682,6 @@
         deps.syncToggleVisuals();
       }
 
-      const anchorIndexBefore = deps.getCurrentAnchorIndex();
-      const stepIndexBefore = targetState.stepIndex;
-      const previousRenderUrls = deps.getCurrentStepRenderUrls();
       const layoutChanged = deps.applyRebuiltLayoutIfChanged(anchorIndexBefore);
 
       if (!layoutChanged) {
@@ -731,19 +731,23 @@
       targetState.isRepairRunning = true;
 
       try {
-        if (!deps.getHasAutoLazyWakeRun()) {
+        if (!targetState.backgroundLazyWakeCount) {
           await deps.wakeLazyImages(targetState.root);
+          targetState.backgroundLazyWakeCount = 1;
+        }
+        if (!deps.getHasAutoLazyWakeRun()) {
           deps.setHasAutoLazyWakeRun(true);
         }
 
         const refreshResult = await deps.refreshSourceItemsFromDom();
+        const anchorIndexBefore = deps.getCurrentAnchorIndex();
+        const stepIndexBefore = targetState.stepIndex;
+        const previousRenderUrls = deps.getCurrentStepRenderUrls();
+
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
         await deps.hydrateImageMetadata(targetState.sourceItems);
         await deps.retryMissingItems();
 
-        const anchorIndexBefore = deps.getCurrentAnchorIndex();
-        const stepIndexBefore = targetState.stepIndex;
-        const previousRenderUrls = deps.getCurrentStepRenderUrls();
         const layoutChanged = deps.applyRebuiltLayoutIfChanged(anchorIndexBefore);
 
         if (!layoutChanged) {
@@ -785,13 +789,13 @@
 
         await deps.wakeLazyImages(targetState.root);
         const refreshResult = await deps.refreshSourceItemsFromDom();
+        const anchorIndexBefore = deps.getCurrentAnchorIndex();
+        const stepIndexBefore = targetState.stepIndex;
+        const previousRenderUrls = deps.getCurrentStepRenderUrls();
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
         await deps.hydrateImageMetadata(targetState.sourceItems);
         await deps.retryMissingItems();
 
-        const anchorIndexBefore = deps.getCurrentAnchorIndex();
-        const stepIndexBefore = targetState.stepIndex;
-        const previousRenderUrls = deps.getCurrentStepRenderUrls();
         const layoutChanged = deps.applyRebuiltLayoutIfChanged(anchorIndexBefore);
 
         if (!layoutChanged) {
