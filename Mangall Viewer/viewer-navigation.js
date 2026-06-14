@@ -27,13 +27,6 @@
         }
       };
 
-      const markFullscreenExitGestureIntent = () => {
-        const state = deps.getState();
-        if (!state) return;
-        if (!(document.fullscreenElement || document.webkitFullscreenElement)) return;
-        state.lastFullscreenExitGestureAt = Date.now();
-      };
-
       const keydown = (e) => {
         const state = deps.getState();
         if (!state) return;
@@ -136,21 +129,6 @@
         const isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
         if (!isFullscreen && state.ignoreNextFullscreenExitClose) {
           state.ignoreNextFullscreenExitClose = false;
-        } else if (
-          !isFullscreen &&
-          state.autoFullscreen !== false &&
-          !state.wasAlreadyFullscreen
-        ) {
-          const now = Date.now();
-          const escapedRecently = now - (state.lastEscapeKeyAt || 0) < 1500;
-          const gestureRecently = now - (state.lastFullscreenExitGestureAt || 0) < 1500;
-
-          // 브라우저가 전체화면 ESC를 먼저 먹으면 keydown이 안 올 수 있다.
-          // 최근 포인터/터치 입력이 없던 전체화면 해제만 ESC로 보고 뷰어까지 닫는다.
-          if (escapedRecently || !gestureRecently) {
-            deps.closeViewer();
-            return;
-          }
         }
 
         deps.refreshCurrentStepRenderBoxes?.();
@@ -158,8 +136,28 @@
         deps.syncImageLoadingBarPosition();
       };
 
+      // 업데이트 알림 버블: 표시 위치는 viewer-ui.js, 사라지는 조건은 여기에서 모아 관리한다.
+      const hideUpdateNotice = () => {
+        const state = deps.getState();
+        if (!state?.settingsUpdateNotice) return;
+        deps.markSettingsUpdateNoticeSeen?.();
+        state.settingsUpdateNotice.classList.add("dcmv-settings-update-notice-hidden");
+        deps.syncHudVisibility?.();
+      };
+
+      const updateNoticeTargetMouseenter = () => {
+        hideUpdateNotice();
+      };
+
+      const hideUpdateNoticeForAction = (action) => {
+        if (action === "toggle-page-picker" || action === "toggle-settings-menu") {
+          hideUpdateNotice();
+        }
+      };
+
       const hudMouseenter = (e) => {
         if (!deps.getState()) return;
+        hideUpdateNotice();
         deps.rememberPointerPosition(e.clientX, e.clientY);
         deps.updateHudHoverState(deps.isPointerInsideHudTrigger(e.clientX, e.clientY));
         clearTimeout(deps.getState().cursorHideTimer);
@@ -171,18 +169,6 @@
         deps.rememberPointerPosition(e.clientX, e.clientY);
         deps.updateHudHoverState(deps.isPointerInsideHudTrigger(e.clientX, e.clientY));
         deps.scheduleCursorHide();
-      };
-
-      const hideSettingsUpdateNotice = () => {
-        const state = deps.getState();
-        if (!state?.settingsUpdateNotice) return;
-        deps.markSettingsUpdateNoticeSeen?.();
-        state.settingsUpdateNotice.classList.add("dcmv-settings-update-notice-hidden");
-        deps.syncHudVisibility?.();
-      };
-
-      const settingsNoticeMouseleave = () => {
-        hideSettingsUpdateNotice();
       };
 
       const toggleFullscreen = (actionEl) => {
@@ -301,6 +287,7 @@
         if (!actionEl) return;
 
         const action = actionEl.getAttribute("data-dcmv-action");
+        hideUpdateNoticeForAction(action);
 
         if (action === "prev" || action === "next") {
           const direction = deps.getLogicalNavigationForOverlayButton(action);
@@ -341,7 +328,6 @@
         } else if (action === "toggle-page-picker") {
           deps.togglePagePicker();
         } else if (action === "toggle-settings-menu") {
-          hideSettingsUpdateNotice();
           deps.toggleSettingsMenu();
         } else if (action === "toggle-use-wasd") {
           state.useWasd = !state.useWasd;
@@ -409,7 +395,7 @@
             deps.showEdgeToast("단면 재설정을 모두 초기화했습니다.", 2000);
           }
         } else if (action === "close") {
-          deps.closeViewer();
+          deps.closeViewer({ forceExitFullscreen: true });
         } else if (action === "go-to-page") {
           const pageIndex = Number(actionEl.getAttribute("data-dcmv-page-index"));
           if (!Number.isInteger(pageIndex)) return;
@@ -445,10 +431,9 @@
         docMouseleave,
         resize,
         fullscreenchange,
-        markFullscreenExitGestureIntent,
         hudMouseenter,
         hudMouseleave,
-        settingsNoticeMouseleave,
+        updateNoticeTargetMouseenter,
         click,
         imageClick
       };
@@ -460,16 +445,13 @@
       document.addEventListener("mouseleave", docMouseleave, true);
       window.addEventListener("resize", resize, true);
       document.addEventListener("fullscreenchange", fullscreenchange, true);
-      window.addEventListener("pointerdown", markFullscreenExitGestureIntent, true);
-      window.addEventListener("touchstart", markFullscreenExitGestureIntent, true);
-      window.addEventListener("mousedown", markFullscreenExitGestureIntent, true);
 
       targetState.overlay.addEventListener("wheel", wheel, { passive: false });
       targetState.overlay.addEventListener("click", click, true);
       targetState.overlay.addEventListener("click", imageClick, true);
       targetState.hud.addEventListener("mouseenter", hudMouseenter);
       targetState.hud.addEventListener("mouseleave", hudMouseleave);
-      targetState.settingsButton?.addEventListener("mouseleave", settingsNoticeMouseleave);
+      targetState.pageCounter?.addEventListener("mouseenter", updateNoticeTargetMouseenter);
     },
 
     shouldIgnoreKeydown(e) {
@@ -671,7 +653,7 @@
         return true;
       }
 
-      if (key === "enter" || key === " " || key === "spacebar") {
+      if (key === "enter" || key === " " || key === "space" || key === "spacebar") {
         deps.goToPageIndex(targetState.pagePickerSelectedIndex);
         return true;
       }

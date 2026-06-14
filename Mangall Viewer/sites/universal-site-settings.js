@@ -886,6 +886,96 @@
       return branch;
     },
 
+    getDominantImageClusterElement(imgEl, root, acceptedElements) {
+      if (!this.isElementLike(imgEl) || !acceptedElements?.size) {
+        return this.getRootBranchElement(imgEl, root);
+      }
+
+      const totalAcceptedCount = acceptedElements.size;
+      let best = null;
+      let current = imgEl.parentElement;
+      while (current && current !== root) {
+        let count = 0;
+        for (const itemEl of acceptedElements) {
+          if (current.contains(itemEl)) {
+            count += 1;
+          }
+        }
+
+        if (count >= 3 && count < totalAcceptedCount) {
+          best = current;
+          break;
+        }
+
+        current = current.parentElement;
+      }
+
+      return best || this.getRootBranchElement(imgEl, root) || imgEl;
+    },
+
+    getDomBlockStats(items) {
+      let knownSizeCount = 0;
+      let totalArea = 0;
+
+      for (const item of items || []) {
+        const { width, height } = this.getKnownImageSize(item.imgEl);
+        if (!width || !height) continue;
+
+        knownSizeCount += 1;
+        totalArea += width * height;
+      }
+
+      return {
+        count: (items || []).length,
+        knownSizeCount,
+        medianArea: knownSizeCount ? totalArea / knownSizeCount : 0
+      };
+    },
+
+    shouldKeepDomBlock(blockStats, dominantStats) {
+      if (!dominantStats || dominantStats.count < 10) {
+        return true;
+      }
+
+      if (blockStats.count >= Math.max(3, Math.ceil(dominantStats.count * 0.2))) {
+        return true;
+      }
+
+      const tinyBlock = blockStats.count <= 2;
+      const tooSmallArea =
+        blockStats.knownSizeCount > 0 &&
+        blockStats.medianArea < 80000;
+
+      return !(tinyBlock || tooSmallArea);
+    },
+
+    getFilteredDomBlocks(blockOrder, blockMap) {
+      const blockInfos = blockOrder.map((blockKey) => {
+        const items = blockMap.get(blockKey) || [];
+        return {
+          blockKey,
+          items,
+          stats: this.getDomBlockStats(items)
+        };
+      });
+
+      let dominant = null;
+      for (const info of blockInfos) {
+        if (
+          !dominant ||
+          info.stats.count > dominant.stats.count
+        ) {
+          dominant = info;
+        }
+      }
+
+      if (!dominant) return blockInfos;
+
+      return blockInfos.filter((info) =>
+        this.shouldKeepDomBlock(info.stats, dominant.stats)
+      );
+    },
+
     collectDomSourceItems(root, deps, adapterApi) {
       const nodes = [];
       const seenElements = new Set();
@@ -906,8 +996,8 @@
 
       nodes.sort((a, b) => this.compareDocumentOrder(a, b));
 
-      const blockOrder = [];
-      const blockMap = new Map();
+      const acceptedItems = [];
+      const acceptedElements = new Set();
 
       for (const node of nodes) {
         const imgEl =
@@ -938,19 +1028,31 @@
           continue;
         }
 
-        const blockEl = this.getRootBranchElement(imgEl, root);
-        const blockKey = blockEl || imgEl;
+        acceptedItems.push({ url, imgEl, anchorHref });
+        acceptedElements.add(imgEl);
+      }
+
+      const blockOrder = [];
+      const blockMap = new Map();
+
+      for (const item of acceptedItems) {
+        const blockEl = this.getDominantImageClusterElement(
+          item.imgEl,
+          root,
+          acceptedElements
+        );
+        const blockKey = blockEl || item.imgEl;
         if (!blockMap.has(blockKey)) {
           blockMap.set(blockKey, []);
           blockOrder.push(blockKey);
         }
-        blockMap.get(blockKey).push({ url, imgEl, anchorHref });
+        blockMap.get(blockKey).push(item);
       }
 
       const orderedItems = [];
-      for (const blockKey of blockOrder) {
-        const items = blockMap.get(blockKey) || [];
-        for (const item of items) {
+      const filteredBlocks = this.getFilteredDomBlocks(blockOrder, blockMap);
+      for (const block of filteredBlocks) {
+        for (const item of block.items) {
           orderedItems.push(item);
         }
       }
@@ -1293,6 +1395,155 @@
         return count;
       }
 
+      function getElementDepth(el) {
+        let depth = 0;
+        for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+          depth += 1;
+        }
+        return depth;
+      }
+
+      function isUsableContentImage(img, adapterApi) {
+        if (!universalSiteSettings.isElementLike(img)) return false;
+        if (img.closest("#dcmv-overlay")) return false;
+        if (adapterApi.isInsideExcludedImageCommentArea(img)) return false;
+        if (adapterApi.isInsideOpenGraphPreview(img)) return false;
+
+        const src =
+          img.getAttribute("data-img-src") ||
+          img.getAttribute("data-src") ||
+          img.getAttribute("data-lazy-src") ||
+          img.getAttribute("data-original") ||
+          img.getAttribute("data-original-src") ||
+          img.currentSrc ||
+          img.getAttribute("src") ||
+          "";
+        if (!universalSiteSettings.shouldTreatAsContentImageElement(img, src)) return false;
+        if (universalSiteSettings.isTooSmallContentImage(img)) return false;
+        if (universalSiteSettings.isLikelyClickableBannerImage(img)) return false;
+        return true;
+      }
+
+      function scoreImageClusterRoot(root, validImages, options = {}) {
+        if (!universalSiteSettings.isElementLike(root) || !validImages?.length) return null;
+
+        let knownSizeCount = 0;
+        let largeCount = 0;
+        let totalArea = 0;
+        let squareCount = 0;
+        let uiUrlCount = 0;
+        const totalImages = root.querySelectorAll?.("img")?.length || validImages.length;
+
+        for (const img of validImages) {
+          const { width, height } = universalSiteSettings.getKnownImageSize(img);
+          const longSide = Math.max(width, height);
+          const shortSide = Math.min(width, height);
+          const area = width * height;
+          const url =
+            img.currentSrc ||
+            img.getAttribute("data-src") ||
+            img.getAttribute("data-original") ||
+            img.getAttribute("src") ||
+            "";
+
+          if (width && height) {
+            knownSizeCount += 1;
+            totalArea += area;
+            if (longSide >= 500 && area >= 150000) {
+              largeCount += 1;
+            }
+            if (shortSide > 0 && longSide / shortSide <= 1.25) {
+              squareCount += 1;
+            }
+          }
+          if (universalSiteSettings.isLikelyUiOrProfileImageUrl(url)) {
+            uiUrlCount += 1;
+          }
+        }
+
+        const count = validImages.length;
+        const medianArea = knownSizeCount ? totalArea / knownSizeCount : 0;
+        const depth = getElementDepth(root);
+        const squareRatio = knownSizeCount ? squareCount / knownSizeCount : 0;
+        const uiUrlRatio = count ? uiUrlCount / count : 0;
+        const noiseCount = Math.max(0, totalImages - count);
+        let score = 0;
+
+        score += Math.min(count, 60) * 160;
+        score += Math.min(largeCount, 60) * 180;
+        score += universalSiteSettings.getAreaScore(medianArea);
+        score += Math.min(totalArea / 5000000, 1) * 120;
+        score += Math.min(depth, 12) * 20;
+        score += Number(options.selectorBonus) || 0;
+        score -= noiseCount * 8;
+        score -= squareRatio * 250;
+        score -= uiUrlRatio * 350;
+
+        return {
+          root,
+          score: Math.max(0, Math.round(score)),
+          count,
+          largeCount,
+          selectorBonus: Number(options.selectorBonus) || 0
+        };
+      }
+
+      function getSelectorBonus(root) {
+        if (!universalSiteSettings.isElementLike(root)) return 0;
+
+        let bonus = 0;
+        for (const selector of contentSelectors) {
+          try {
+            if (root.matches?.(selector)) {
+              bonus += 220;
+              continue;
+            }
+            if (root.querySelector?.(selector)) {
+              bonus += 80;
+            }
+          } catch {
+          }
+        }
+
+        return Math.min(bonus, 360);
+      }
+
+      function findBestImageClusterRoot(doc, adapterApi) {
+        const rootScores = new Map();
+        const images = Array.from(doc.querySelectorAll?.("img") || []);
+
+        for (const img of images) {
+          if (!isUsableContentImage(img, adapterApi)) continue;
+
+          for (
+            let node = img.parentElement;
+            node && node !== doc.documentElement;
+            node = node.parentElement
+          ) {
+            if (node.closest?.("#dcmv-overlay")) break;
+            if (node === doc.body || node.matches?.("header, nav, aside, footer")) break;
+
+            const list = rootScores.get(node) || [];
+            list.push(img);
+            rootScores.set(node, list);
+          }
+        }
+
+        let best = null;
+        for (const [root, validImages] of rootScores.entries()) {
+          if (validImages.length < 3) continue;
+          const scoreInfo = scoreImageClusterRoot(root, validImages, {
+            selectorBonus: getSelectorBonus(root)
+          });
+          if (!scoreInfo) continue;
+          if (!best || scoreInfo.score > best.score) {
+            best = scoreInfo;
+          }
+        }
+
+        return best;
+      }
+
       return {
         id: site.id,
         name: "만갤 뷰어",
@@ -1311,42 +1562,33 @@
           let bestScore = 0;
 
           for (const selector of contentSelectors) {
-            const el = doc.querySelector(selector);
-            if (!el) continue;
-
-            if (!fallbackRoot) {
-              fallbackRoot = el;
+            try {
+              fallbackRoot = doc.querySelector(selector);
+            } catch {
             }
-
-            const score = countContentImages(el);
-            if (score > bestScore) {
-              bestRoot = el;
-              bestScore = score;
+            if (fallbackRoot) {
+              break;
             }
           }
 
-          const candidateRoots = Array.from(
-            doc.querySelectorAll?.("article, main, section, .content, .post-content, .entry-content, .article-content, .viewer-wrap, .read-content, .reading-content, #postViewArea, #post-area, .se-main-container, #content, #contents") || []
-          ).filter((el) => !el.closest?.("#dcmv-overlay"));
-
-          for (const candidate of candidateRoots) {
-            const score = countContentImages(candidate);
-            if (score > bestScore) {
-              bestRoot = candidate;
-              bestScore = score;
-            }
+          const clusterRoot = findBestImageClusterRoot(doc, this);
+          if (clusterRoot && clusterRoot.largeCount >= 3) {
+            bestRoot = clusterRoot.root;
+            bestScore = clusterRoot.score;
           }
 
           if (bestRoot && bestScore > 0) {
             return bestRoot;
           }
 
-          for (const frameDoc of universalSiteSettings.getAccessibleEmbeddedDocuments(doc)) {
-            const frameRoot = this.findContentRoot(frameDoc);
-            const frameScore = countContentImages(frameRoot);
-            if (frameRoot && frameScore > bestScore) {
-              bestRoot = frameRoot;
-              bestScore = frameScore;
+          if (!bestRoot) {
+            for (const frameDoc of universalSiteSettings.getAccessibleEmbeddedDocuments(doc)) {
+              const frameRoot = this.findContentRoot(frameDoc);
+              const frameScore = countContentImages(frameRoot);
+              if (frameRoot && frameScore > bestScore) {
+                bestRoot = frameRoot;
+                bestScore = frameScore;
+              }
             }
           }
 

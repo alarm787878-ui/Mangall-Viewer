@@ -81,6 +81,17 @@
     return `${location.origin}${location.pathname}${location.search}`;
   }
 
+  function clearReopenedViewerPageKeyOnReload() {
+    const navEntry = performance.getEntriesByType?.("navigation")?.[0];
+    if (navEntry?.type !== "reload") return;
+
+    try {
+      window.sessionStorage.removeItem(REOPENED_VIEWER_PAGE_SESSION_KEY);
+    } catch {
+    }
+    reopenedViewerPageKey = "";
+  }
+
   function clearPageScopedSessionCache() {
     for (const key of [
       PAGE_SESSION_KEY,
@@ -131,6 +142,7 @@
     window.setInterval(handlePageKeyChange, 1000);
   }
 
+  clearReopenedViewerPageKeyOnReload();
   installPageKeyChangeWatcher();
 
   function getCurrentSiteAdapter() {
@@ -257,15 +269,47 @@
     try {
       const result = req.call(el);
       if (result && typeof result.catch === "function") {
-        result.catch(() => {});
+        result
+          .then(() => {
+            lockViewerFullscreenEscape();
+          })
+          .catch(() => {});
+      } else {
+        lockViewerFullscreenEscape();
       }
     } catch {
       // no user activation, denied, or unsupported
     }
   }
 
+  function lockViewerFullscreenEscape() {
+    try {
+      const keyboard = navigator.keyboard;
+      if (!keyboard || typeof keyboard.lock !== "function") return;
+
+      const result = keyboard.lock(["Escape"]);
+      if (result && typeof result.catch === "function") {
+        result.catch(() => {});
+      }
+    } catch {
+      // unsupported or denied
+    }
+  }
+
+  function unlockViewerFullscreenEscape() {
+    try {
+      const keyboard = navigator.keyboard;
+      if (!keyboard || typeof keyboard.unlock !== "function") return;
+
+      keyboard.unlock();
+    } catch {
+      // unsupported
+    }
+  }
+
   function exitViewerDocumentFullscreen() {
     const doc = document;
+    unlockViewerFullscreenEscape();
     if (!doc.fullscreenElement && !doc.webkitFullscreenElement) return;
     const exit =
       doc.exitFullscreen ||
@@ -448,7 +492,7 @@
       isDcinsideSite: getCurrentSiteAdapter()?.id === "dcinside",
       manualPairingResetIndices: [],
       shouldReuseSavedAutoFirstPageSingle: false,
-      hasLoggedFirstViewerImageLoad: false,
+      hasRunInitialAutoAfterFirstImageLoadTrigger: false,
       hasRunInitialAutoAfterFirstImageLoad: false,
       initialAutoMetadataPromise: null,
       hasPresentedInitialViewer: false,
@@ -477,6 +521,7 @@
       repairTimers: [],
       isRepairRunning: false,
       backgroundLazyWakeCount: 0,
+      shouldSkipLazyWakeScroll: false,
       shouldShowInitialHudGuide: false,
       handlers: {},
       requestedTargetUrl: runtimeModules.pageLoading?.normalizeComparableUrl
@@ -554,6 +599,8 @@
     state.firstSingleCheckbox.checked = state.firstPageSingle;
     syncToggleVisuals();
     rebuildStepsKeepingAnchor(resolveInitialAnchorIndex());
+    const hasAlreadyOpenedViewerOnPage = hasReopenedViewerPageKey();
+    state.shouldSkipLazyWakeScroll = hasAlreadyOpenedViewerOnPage;
     state.stage.style.visibility = state.shouldReuseSavedAutoFirstPageSingle
       ? ""
       : "hidden";
@@ -574,10 +621,14 @@
     if (!state) return;
 
     const shouldPreserveFullscreen = !!options.preserveFullscreen;
+    const shouldForceExitFullscreen = !!options.forceExitFullscreen;
     const shouldRestorePageScroll = options.restorePageScroll !== false;
     const shouldSavePosition = options.savePosition !== false;
 
-    if (!shouldPreserveFullscreen && !state.wasAlreadyFullscreen) {
+    if (
+      shouldForceExitFullscreen ||
+      (!shouldPreserveFullscreen && !state.wasAlreadyFullscreen)
+    ) {
       exitViewerDocumentFullscreen();
     }
 
@@ -609,22 +660,6 @@
       prevState.handlers.fullscreenchange,
       true
     );
-    window.removeEventListener(
-      "pointerdown",
-      prevState.handlers.markFullscreenExitGestureIntent,
-      true
-    );
-    window.removeEventListener(
-      "touchstart",
-      prevState.handlers.markFullscreenExitGestureIntent,
-      true
-    );
-    window.removeEventListener(
-      "mousedown",
-      prevState.handlers.markFullscreenExitGestureIntent,
-      true
-    );
-
     prevState.overlay.removeEventListener("wheel", prevState.handlers.wheel);
     prevState.overlay.removeEventListener("click", prevState.handlers.click, true);
     prevState.overlay.removeEventListener(
@@ -634,9 +669,9 @@
     );
     prevState.hud.removeEventListener("mouseenter", prevState.handlers.hudMouseenter);
     prevState.hud.removeEventListener("mouseleave", prevState.handlers.hudMouseleave);
-    prevState.settingsButton?.removeEventListener(
-      "mouseleave",
-      prevState.handlers.settingsNoticeMouseleave
+    prevState.pageCounter?.removeEventListener(
+      "mouseenter",
+      prevState.handlers.updateNoticeTargetMouseenter
     );
 
     if (prevState.overlay?.parentNode) {
@@ -1081,11 +1116,26 @@
   }
 
   function getCurrentAnchorIndex() {
-    if (!state || !state.currentStep || !state.currentStep.images.length) {
-      return 0;
+    if (!state) return 0;
+
+    if (state.currentStep?.images?.length) {
+      return state.currentStep.images[0].index;
     }
 
-    return state.currentStep.images[0].index;
+    let steps = Array.isArray(state.steps) ? state.steps : [];
+    if (!steps.length && state.sourceItems?.length) {
+      state.steps = buildAllSteps();
+      steps = Array.isArray(state.steps) ? state.steps : [];
+    }
+
+    const fallbackStep = steps[state.stepIndex] || steps.find((step) => step?.images?.length);
+    if (fallbackStep?.images?.length) {
+      state.currentStep = fallbackStep;
+      state.stepIndex = Math.max(0, steps.indexOf(fallbackStep));
+      return fallbackStep.images[0].index;
+    }
+
+    return 0;
   }
 
   function getSavedImageIndex(targetState = state) {
@@ -1426,6 +1476,7 @@
     runtimeModules.navigation?.goToPageIndex?.(state, pageIndex, options, {
       navThrottleMs: NAV_THROTTLE_MS,
       getState: () => state,
+      findStepIndexForAnchorInSteps,
       rebuildStepsKeepingAnchor,
       renderCurrentStep,
       togglePagePicker,
@@ -1439,15 +1490,30 @@
       handleViewerImageError,
       syncImageLoadingBarPosition,
       runInitialAutoWhenReady,
+      buildAllSteps,
       renderPageCounter,
       syncManualResetClearVisibility,
       preloadNearbySteps,
+      flushDeferredRepairRender,
       refreshViewerStepLayout: () => {
         runtimeModules.layout?.refreshCurrentStepRenderBoxes?.(state);
         globalThis.__dcmvDcinsideComments?.updateAllCommentLayouts?.();
       }
     });
     updateCornerPageCounter();
+  }
+
+  function flushDeferredRepairRender() {
+    if (!state?.deferredRepairRenderRequested) return;
+    if (state.stage?.querySelector?.(":scope > .dcmv-page-wrap[data-dcmv-pending='1']")) {
+      return;
+    }
+
+    state.deferredRepairRenderRequested = false;
+    state.deferredRepairRenderReason = "";
+
+    renderCurrentStep();
+    syncHudTrigger();
   }
 
   function updateCornerPageCounter() {
@@ -1918,12 +1984,18 @@
   // 페이지 스크롤을 아래로 훑으며 src가 비어 있는 이미지를 채운 뒤 원래 스크롤 위치로 복원한다.
   async function wakeLazyImages(root) {
     if (runtimeModules.pageLoading?.wakeLazyImages) {
+      if (state?.shouldSkipLazyWakeScroll && !state?.isManualRefreshRunning) {
+        pokeLazyImages(root);
+        return;
+      }
+
       await runtimeModules.pageLoading.wakeLazyImages(root, {
         lazyWakeScrollDelayMs: LAZY_WAKE_SCROLL_DELAY_MS,
         lazyWakeScrollStep: LAZY_WAKE_SCROLL_STEP,
         pokeLazyImages,
         sleep
       });
+      rememberReopenedViewerPageKey();
     }
   }
 

@@ -1,6 +1,30 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
   const siteRegistry = globalThis.__dcmvSiteRegistry || {};
+  // 원본 후보가 작은 오류 안내 이미지면 기존 이미지를 유지하기 위한 최소 기준.
+  const MIN_REPLACEMENT_LONG_SIDE_WHEN_SOURCE_UNKNOWN = 800;
+  const MIN_REPLACEMENT_AREA_WHEN_SOURCE_UNKNOWN = 500000;
+
+  function shouldUseReplacementImage(item, width, height) {
+    if (!width || !height) return false;
+
+    const candidateLongSide = Math.max(width, height);
+    const candidateArea = width * height;
+    const sourceWidth = item?.width || 0;
+    const sourceHeight = item?.height || 0;
+
+    if (!item?.hasKnownSourceSize || !sourceWidth || !sourceHeight) {
+      return (
+        candidateLongSide >= MIN_REPLACEMENT_LONG_SIDE_WHEN_SOURCE_UNKNOWN &&
+        candidateArea >= MIN_REPLACEMENT_AREA_WHEN_SOURCE_UNKNOWN
+      );
+    }
+
+    return (
+      candidateLongSide >= Math.max(sourceWidth, sourceHeight) &&
+      candidateArea > sourceWidth * sourceHeight
+    );
+  }
 
   function getCurrentSiteAdapter() {
     return siteRegistry.getSiteAdapterForUrl?.(location.href) || null;
@@ -39,6 +63,61 @@
     }
 
     return branch;
+  }
+
+  function getRepairCurrentDisplayFingerprint(
+    targetState,
+    useSourceItems = false,
+    includeSize = true
+  ) {
+    if (!targetState?.currentStep) return "";
+
+    const step = targetState.currentStep;
+    const images = (step.images || []).map((item) => {
+      const sourceItem = useSourceItems
+        ? targetState.sourceItems?.[item.index] || item
+        : item;
+
+      return [
+        sourceItem.index,
+        sourceItem.displayIndex,
+        sourceItem.resolvedSrc || sourceItem.src || "",
+        includeSize ? sourceItem.width || 0 : 0,
+        includeSize ? sourceItem.height || 0 : 0,
+        sourceItem.failed ? 1 : 0
+      ].join(":");
+    });
+
+    return [
+      targetState.totalCount || 0,
+      targetState.stepIndex,
+      step.displayType || "",
+      step.startIndex,
+      images.join(",")
+    ].join("|");
+  }
+
+  function hasPendingViewerPageRender(targetState) {
+    return !!targetState?.stage?.querySelector?.(":scope > .dcmv-page-wrap[data-dcmv-pending='1']");
+  }
+
+  function deferRepairRender(targetState, detail) {
+    if (!targetState) return;
+
+    targetState.deferredRepairRenderRequested = true;
+    targetState.deferredRepairRenderReason = detail?.reason || "repair";
+  }
+
+  function renderOrDeferRepair(targetState, deps, detail) {
+    if (!targetState || !detail?.shouldRender) return;
+
+    if (hasPendingViewerPageRender(targetState)) {
+      deferRepairRender(targetState, detail);
+      return;
+    }
+
+    deps.renderCurrentStep();
+    deps.syncHudTrigger();
   }
 
   modules.pageLoading = {
@@ -209,6 +288,7 @@
       const urls = [
         item.src,
         item.resolvedSrc,
+        item.replacementCandidateSrc,
         item.originalPopUrl,
         item.element?.currentSrc,
         item.element?.getAttribute?.("src"),
@@ -279,14 +359,17 @@
       return new Promise((resolve) => {
         let done = false;
         const prevLandscape = deps.isLandscapeLike(item.width, item.height);
+        const previousResolvedSrc = item.resolvedSrc || "";
 
         const finish = (failed) => {
           if (done) return;
           done = true;
           clearTimeout(timer);
 
+          const hasKnownSourceSize = !!(item.width && item.height);
           if (!item.width) item.width = 1200;
           if (!item.height) item.height = 1700;
+          item.hasKnownSourceSize = hasKnownSourceSize;
 
           if (failed && !options.forceImageFailure) {
             item.failed = false;
@@ -294,21 +377,86 @@
             item.failed = !!failed;
           }
 
-          if (!item.failed && item.width >= item.height && item.originalPopUrl) {
-            item.resolvedSrc = deps.convertPopUrlToDirectImageUrl(item.originalPopUrl);
-          } else {
-            item.resolvedSrc = "";
+          const replacementCandidateSrc =
+            !item.failed && item.originalPopUrl
+              ? deps.convertPopUrlToDirectImageUrl(item.originalPopUrl)
+              : "";
+          item.replacementCandidateSrc = replacementCandidateSrc;
+
+          const resolveMetadata = () => {
+            const nextLandscape = deps.isLandscapeLike(item.width, item.height);
+            resolve({
+              index: item.index,
+              orientationChanged:
+                (prevLandscape === null && nextLandscape !== null) ||
+                (prevLandscape !== null &&
+                  nextLandscape !== null &&
+                  prevLandscape !== nextLandscape)
+            });
+          };
+
+          if (
+            !replacementCandidateSrc ||
+            replacementCandidateSrc === item.src ||
+            item.replacementCandidateRejected
+          ) {
+            item.resolvedSrc =
+              previousResolvedSrc && previousResolvedSrc === replacementCandidateSrc
+                ? previousResolvedSrc
+                : "";
+            resolveMetadata();
+            return;
           }
 
-          const nextLandscape = deps.isLandscapeLike(item.width, item.height);
-          resolve({
-            index: item.index,
-            orientationChanged:
-              (prevLandscape === null && nextLandscape !== null) ||
-              (prevLandscape !== null &&
-                nextLandscape !== null &&
-                prevLandscape !== nextLandscape)
-          });
+          if (previousResolvedSrc === replacementCandidateSrc) {
+            item.resolvedSrc = previousResolvedSrc;
+            resolveMetadata();
+            return;
+          }
+
+          // 고화질 후보는 화면 렌더 후가 아니라 메타데이터/repair 단계에서 미리 검증한다.
+          item.isCheckingReplacementCandidate = true;
+          let candidateDone = false;
+          const candidateProbe = new Image();
+          const finishCandidate = (accepted) => {
+            if (candidateDone) return;
+            candidateDone = true;
+            clearTimeout(candidateTimer);
+            item.isCheckingReplacementCandidate = false;
+            if (!accepted) {
+              item.resolvedSrc = "";
+            }
+            resolveMetadata();
+          };
+
+          candidateProbe.onload = () => {
+            const candidateWidth = candidateProbe.naturalWidth || 0;
+            const candidateHeight = candidateProbe.naturalHeight || 0;
+            if (!shouldUseReplacementImage(item, candidateWidth, candidateHeight)) {
+              item.replacementCandidateRejected = true;
+              finishCandidate(false);
+              return;
+            }
+
+            item.resolvedSrc = replacementCandidateSrc;
+            item.width = candidateWidth || item.width;
+            item.height = candidateHeight || item.height;
+            item.hasKnownSourceSize = true;
+            finishCandidate(true);
+          };
+          candidateProbe.onerror = () => {
+            finishCandidate(false);
+          };
+          const candidateTimer = setTimeout(() => {
+            finishCandidate(false);
+          }, deps.imageMetadataTimeoutMs);
+
+          try {
+            candidateProbe.src = replacementCandidateSrc;
+          } catch {
+            item.replacementCandidateRejected = true;
+            finishCandidate(false);
+          }
         };
 
         const probe = new Image();
@@ -442,8 +590,15 @@
           ...item,
           // lazy 로딩 뒤 DOM의 실제 src/크기가 바뀌면 새 값을 우선해야 양면/단면 판정이 갱신된다.
           resolvedSrc: sameSrc ? prevItem.resolvedSrc || item.resolvedSrc : item.resolvedSrc,
+          replacementCandidateSrc: sameSrc
+            ? prevItem.replacementCandidateSrc || item.replacementCandidateSrc
+            : item.replacementCandidateSrc,
+          replacementCandidateRejected: sameSrc
+            ? prevItem.replacementCandidateRejected || item.replacementCandidateRejected
+            : item.replacementCandidateRejected,
           width: item.width || prevItem.width,
           height: item.height || prevItem.height,
+          hasKnownSourceSize: item.hasKnownSourceSize || prevItem.hasKnownSourceSize,
           failed: sameSrc ? prevItem.failed : item.failed,
           viewerRetryCount: sameSrc ? prevItem.viewerRetryCount || 0 : 0
         };
@@ -656,9 +811,12 @@
 
       const refreshResult = await deps.refreshSourceItemsFromDom();
       const previousCount = targetState.totalCount;
-      const anchorIndexBefore = deps.getCurrentAnchorIndex();
-      const stepIndexBefore = targetState.stepIndex;
       const previousRenderUrls = deps.getCurrentStepRenderUrls();
+      const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(
+        targetState,
+        false,
+        false
+      );
       let didChange = false;
 
       deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
@@ -682,22 +840,36 @@
         deps.syncToggleVisuals();
       }
 
-      const layoutChanged = deps.applyRebuiltLayoutIfChanged(anchorIndexBefore);
+      const currentAnchorIndex = deps.getCurrentAnchorIndex();
+      const layoutChanged = deps.applyRebuiltLayoutIfChanged(currentAnchorIndex);
+      const renderUrlsChanged = deps.didCurrentStepRenderUrlsChange(previousRenderUrls);
 
       if (!layoutChanged) {
-        targetState.stepIndex = Math.max(
-          0,
-          Math.min(stepIndexBefore, targetState.steps.length - 1)
-        );
-        targetState.currentStep =
-          targetState.steps[targetState.stepIndex] || targetState.currentStep;
-        if (deps.didCurrentStepRenderUrlsChange(previousRenderUrls)) {
+        if (renderUrlsChanged) {
           deps.syncCurrentStepImagesFromSourceItems();
         }
       }
 
-      deps.renderCurrentStep();
-      deps.syncHudTrigger();
+      const afterDisplayFingerprint = getRepairCurrentDisplayFingerprint(
+        targetState,
+        true,
+        false
+      );
+      const currentDisplayChanged = beforeDisplayFingerprint !== afterDisplayFingerprint;
+      const shouldRender =
+        didChange ||
+        layoutChanged ||
+        renderUrlsChanged ||
+        currentDisplayChanged;
+      if (!layoutChanged && currentDisplayChanged && !renderUrlsChanged) {
+        deps.syncCurrentStepImagesFromSourceItems();
+      }
+
+      const renderDecision = {
+        reason: "initialPostLazyRefreshRound",
+        shouldRender
+      };
+      renderOrDeferRepair(targetState, deps, renderDecision);
       deps.setImageLoadingProgress(1, { complete: true });
       if (
         refreshResult.countChanged ||
@@ -740,30 +912,46 @@
         }
 
         const refreshResult = await deps.refreshSourceItemsFromDom();
-        const anchorIndexBefore = deps.getCurrentAnchorIndex();
-        const stepIndexBefore = targetState.stepIndex;
         const previousRenderUrls = deps.getCurrentStepRenderUrls();
+        const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(
+          targetState,
+          false,
+          false
+        );
 
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
-        await deps.hydrateImageMetadata(targetState.sourceItems);
-        await deps.retryMissingItems();
+        const metadataResult = await deps.hydrateImageMetadata(targetState.sourceItems);
+        const retryResult = await deps.retryMissingItems();
 
-        const layoutChanged = deps.applyRebuiltLayoutIfChanged(anchorIndexBefore);
+        const currentAnchorIndex = deps.getCurrentAnchorIndex();
+        const layoutChanged = deps.applyRebuiltLayoutIfChanged(currentAnchorIndex);
+        const renderUrlsChanged = deps.didCurrentStepRenderUrlsChange(previousRenderUrls);
 
         if (!layoutChanged) {
-          targetState.stepIndex = Math.max(
-            0,
-            Math.min(stepIndexBefore, targetState.steps.length - 1)
-          );
-          targetState.currentStep =
-            targetState.steps[targetState.stepIndex] || targetState.currentStep;
-          if (deps.didCurrentStepRenderUrlsChange(previousRenderUrls)) {
+          if (renderUrlsChanged) {
             deps.syncCurrentStepImagesFromSourceItems();
           }
         }
 
-        deps.renderCurrentStep();
-        deps.syncHudTrigger();
+        const afterDisplayFingerprint = getRepairCurrentDisplayFingerprint(
+          targetState,
+          true,
+          false
+        );
+        const currentDisplayChanged = beforeDisplayFingerprint !== afterDisplayFingerprint;
+        const shouldRender =
+          layoutChanged ||
+          renderUrlsChanged ||
+          currentDisplayChanged;
+        if (!layoutChanged && currentDisplayChanged && !renderUrlsChanged) {
+          deps.syncCurrentStepImagesFromSourceItems();
+        }
+
+        const renderDecision = {
+          reason: "backgroundRepairRound",
+          shouldRender
+        };
+        renderOrDeferRepair(targetState, deps, renderDecision);
       } finally {
         if (deps.getState()) {
           deps.getState().isRepairRunning = false;
@@ -789,33 +977,39 @@
 
         await deps.wakeLazyImages(targetState.root);
         const refreshResult = await deps.refreshSourceItemsFromDom();
-        const anchorIndexBefore = deps.getCurrentAnchorIndex();
-        const stepIndexBefore = targetState.stepIndex;
         const previousRenderUrls = deps.getCurrentStepRenderUrls();
+        const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(targetState);
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
-        await deps.hydrateImageMetadata(targetState.sourceItems);
-        await deps.retryMissingItems();
+        const metadataResult = await deps.hydrateImageMetadata(targetState.sourceItems);
+        const retryResult = await deps.retryMissingItems();
 
-        const layoutChanged = deps.applyRebuiltLayoutIfChanged(anchorIndexBefore);
+        const currentAnchorIndex = deps.getCurrentAnchorIndex();
+        const layoutChanged = deps.applyRebuiltLayoutIfChanged(currentAnchorIndex);
+        const renderUrlsChanged = deps.didCurrentStepRenderUrlsChange(previousRenderUrls);
 
         if (!layoutChanged) {
           if (didChange) {
-            deps.rebuildStepsKeepingAnchor(anchorIndexBefore);
+            deps.rebuildStepsKeepingAnchor(deps.getCurrentAnchorIndex());
           } else {
-            targetState.stepIndex = Math.max(
-              0,
-              Math.min(stepIndexBefore, targetState.steps.length - 1)
-            );
-            targetState.currentStep =
-              targetState.steps[targetState.stepIndex] || targetState.currentStep;
             deps.syncCurrentStepImagesFromSourceItems();
           }
         } else {
           didChange = true;
         }
 
-        deps.renderCurrentStep();
-        deps.syncHudTrigger();
+        const afterDisplayFingerprint = getRepairCurrentDisplayFingerprint(targetState, true);
+        const currentDisplayChanged = beforeDisplayFingerprint !== afterDisplayFingerprint;
+        const shouldRender =
+          didChange ||
+          layoutChanged ||
+          renderUrlsChanged ||
+          currentDisplayChanged;
+
+        const renderDecision = {
+          reason: "runManualRefresh",
+          shouldRender
+        };
+        renderOrDeferRepair(targetState, deps, renderDecision);
         if (didChange || layoutChanged) {
           deps.showEdgeToast("갱신 완료", 2000);
         }
