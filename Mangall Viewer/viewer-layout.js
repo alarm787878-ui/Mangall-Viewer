@@ -14,21 +14,13 @@
       return;
     }
 
-    const frozenWidth = Number(renderBox.dataset.dcmvDisplayWidth) || 0;
-    const frozenHeight = Number(renderBox.dataset.dcmvDisplayHeight) || 0;
-    const width = frozenWidth || item?.width || imageElement.naturalWidth || 0;
-    const height = frozenHeight || item?.height || imageElement.naturalHeight || 0;
+    const width = imageElement.naturalWidth || item?.width || 0;
+    const height = imageElement.naturalHeight || item?.height || 0;
 
     if (!width || !height) {
       renderBox.style.removeProperty("width");
       renderBox.style.removeProperty("height");
       return;
-    }
-
-    // 페이지 표시 중 실제 이미지 로드나 고화질 교체가 끝나도 박스 크기는 처음 계산값으로 고정한다.
-    if (!frozenWidth || !frozenHeight) {
-      renderBox.dataset.dcmvDisplayWidth = `${width}`;
-      renderBox.dataset.dcmvDisplayHeight = `${height}`;
     }
 
     const availableWidth =

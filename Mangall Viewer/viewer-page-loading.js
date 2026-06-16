@@ -1112,12 +1112,6 @@
         return;
       }
 
-      if (targetState.shouldReuseSavedAutoFirstPageSingle) {
-        targetState.hasRunInitialAutoAfterFirstImageLoad = true;
-        await deps.presentInitialViewerAfterInitialAuto(false);
-        return;
-      }
-
       await deps.ensureInitialAutoMetadataWindow();
       await deps.syncKnownDimensionsFromDom();
 

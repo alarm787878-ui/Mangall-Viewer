@@ -363,11 +363,6 @@
           decodeHtml
         })
       : [];
-    const shouldWaitForInitialMetadata = !!(
-      runtimeModules.pageLoading?.loadLastReadPosition
-        ? runtimeModules.pageLoading.loadLastReadPosition(PAGE_SESSION_KEY)
-        : null
-    );
     if (!sourceItems.length) {
       exitViewerDocumentFullscreen();
       showErrorToast("본문 영역에서 이미지를 찾지 못했습니다.", 3000);
@@ -491,7 +486,6 @@
           : !!settings.showCornerPageCounter,
       isDcinsideSite: getCurrentSiteAdapter()?.id === "dcinside",
       manualPairingResetIndices: [],
-      shouldReuseSavedAutoFirstPageSingle: false,
       hasRunInitialAutoAfterFirstImageLoadTrigger: false,
       hasRunInitialAutoAfterFirstImageLoad: false,
       initialAutoMetadataPromise: null,
@@ -584,11 +578,6 @@
     const savedAutoFirstPageSingle = loadSavedAutoFirstPageSingleValue();
     if (savedAutoFirstPageSingle !== null) {
       state.firstPageSingle = savedAutoFirstPageSingle;
-      state.shouldReuseSavedAutoFirstPageSingle = shouldWaitForInitialMetadata;
-    }
-
-    if (shouldWaitForInitialMetadata) {
-      await hydrateImageMetadata(state.sourceItems);
     }
 
     const savedManualPairingResetIndices = loadSavedManualPairingResetIndices();
@@ -601,14 +590,7 @@
     rebuildStepsKeepingAnchor(resolveInitialAnchorIndex());
     const hasAlreadyOpenedViewerOnPage = hasReopenedViewerPageKey();
     state.shouldSkipLazyWakeScroll = hasAlreadyOpenedViewerOnPage;
-    state.stage.style.visibility = state.shouldReuseSavedAutoFirstPageSingle
-      ? ""
-      : "hidden";
-    if (state.shouldReuseSavedAutoFirstPageSingle) {
-      state.hasRunInitialAutoAfterFirstImageLoad = true;
-      state.hasPresentedInitialViewer = true;
-      showHudTemporarily();
-    }
+    state.stage.style.visibility = "hidden";
     renderCurrentStep();
     syncHudTrigger();
     scheduleInitialPostLazyRefresh();
