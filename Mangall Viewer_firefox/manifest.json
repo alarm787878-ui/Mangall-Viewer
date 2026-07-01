@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "만갤 뷰어 - dcinside Image Viewer",
-  "version": "1.3.2.1",
-  "description": "디시인사이드에서 이미지를 양면 전체화면으로 편하게 볼 수 있는 뷰어입니다.",
+  "version": "1.5.6",
+  "description": "디시인사이드를 비롯한 여러 웹사이트에서 이미지를 양면 전체화면으로 편하게 볼 수 있는 뷰어입니다.",
   "permissions": [
     "menus",
     "contextMenus",
@@ -20,10 +20,14 @@
     "*://kone.gg/*",
     "*://*.kone.gg/*"
   ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "mangall-viewer-fx@codex.local",
-      "strict_min_version": "121.0",
+      "strict_min_version": "142.0",
       "data_collection_permissions": {
         "required": [
           "none"
@@ -35,6 +39,7 @@
     "scripts": [
       "browser-api.js",
       "site-registry.js",
+      "sites/universal-site-settings.js",
       "sites/arca-live.js",
       "sites/blogspot.js",
       "sites/fc2.js",
@@ -48,9 +53,20 @@
     ],
     "service_worker": "background.js"
   },
+  "options_ui": {
+    "page": "extension-settings.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Q"
+      },
+      "description": "만갤 뷰어 열기"
+    }
+  },
   "action": {
     "default_title": "만갤 뷰어",
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon_16.png",
       "32": "icons/icon_32.png",

@@ -2,6 +2,16 @@
   overflow: hidden !important;
 }
 
+.dcmv-hide-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.dcmv-hide-scrollbar::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+}
+
 #dcmv-overlay,
 .dcmv-overlay {
   position: fixed;
@@ -14,6 +24,11 @@
 .dcmv-overlay.dcmv-cursor-hidden,
 .dcmv-overlay.dcmv-cursor-hidden * {
   cursor: none !important;
+}
+
+#dcmv-overlay ~ * .dcmv-hover-btn,
+.dcmv-overlay ~ * .dcmv-hover-btn {
+  display: none !important;
 }
 
 .dcmv-stage {
@@ -58,6 +73,8 @@
   justify-content: center;
   gap: 0;
   user-select: none;
+  flex: 0 0 100vw;
+  flex-shrink: 0;
 }
 
 .dcmv-page-single {
@@ -65,35 +82,32 @@
   height: 100vh;
 }
 
-.dcmv-page-single .dcmv-image {
+.dcmv-page-single .dcmv-image,
+.dcmv-page-single-landscape .dcmv-image,
+.dcmv-page-pair .dcmv-image {
   display: block;
-  width: auto;
-  height: auto;
-  max-width: calc(100vw - 4px);
-  max-height: calc(100vh - 4px);
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
+}
+
+.dcmv-page-single .dcmv-image,
+.dcmv-page-single-landscape .dcmv-image {
+  width: 100vw;
+  height: 100%;
+  flex: 0 0 100vw;
+}
+
+.dcmv-page-pair .dcmv-image {
+  width: auto;
+  height: 100vh;
+  max-width: 50vw;
+  flex: 0 1 auto;
 }
 
 .dcmv-page-single-landscape {
   width: 100vw;
   height: 100vh;
-}
-
-.dcmv-page-single-landscape .dcmv-image {
-  width: 100vw;
-  height: 100vh;
-  max-width: 100vw;
-  max-height: 100vh;
-  object-fit: contain;
-}
-
-.dcmv-page-pair .dcmv-image {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: 50vw;
-  max-height: 100vh;
-  object-fit: contain;
 }
 
 .dcmv-hud-trigger {
@@ -343,6 +357,67 @@
   width: 100%;
   height: 100%;
   fill: rgba(255, 255, 255, 0.92);
+}
+
+.dcmv-settings-update-notice {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 12px);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(260px, calc(100vw - 32px));
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(64, 64, 64, 0.88);
+  color: rgba(255, 255, 255, 0.90);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: center;
+  white-space: normal;
+  pointer-events: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 12px 26px rgba(0, 0, 0, 0.30);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  opacity: 1;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  z-index: 2;
+}
+
+.dcmv-settings-update-notice::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 7px solid rgba(64, 64, 64, 0.88);
+}
+
+.dcmv-settings-update-notice-hidden {
+  opacity: 0;
+  transform: translateX(-50%) translateY(6px);
+}
+
+.dcmv-fullscreen-btn {
+  position: relative;
+}
+
+.dcmv-fullscreen-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dcmv-fullscreen-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .dcmv-settings-menu {
@@ -613,4 +688,61 @@
   .dcmv-page-counter {
     font-size: 13px;
   }
+}
+
+/* Settings basic/advanced toggle */
+.dcmv-settings-menu {
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.dcmv-settings-slider {
+  position: relative;
+  width: 100%;
+}
+
+.dcmv-settings-basic,
+.dcmv-settings-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.dcmv-settings-advanced {
+  display: none;
+}
+
+.dcmv-settings-slider.dcmv-settings-show-advanced .dcmv-settings-basic {
+  display: none;
+}
+
+.dcmv-settings-slider.dcmv-settings-show-advanced .dcmv-settings-advanced {
+  display: flex;
+}
+
+/* Corner page counter styles */
+.dcmv-corner-page-counter {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  padding: 6px 10px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  pointer-events: none;
+  user-select: none;
+  z-index: 2147483645;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.dcmv-corner-page-counter.dcmv-corner-counter-visible {
+  opacity: 1;
+}
+
+.dcmv-corner-page-counter-hidden {
+  display: none !important;
 }

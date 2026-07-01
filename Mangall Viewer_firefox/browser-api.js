@@ -5,12 +5,31 @@
       : typeof chrome !== "undefined"
         ? chrome
         : null;
+  const usesPromiseApi =
+    typeof browser !== "undefined" && extensionApi === browser;
 
   function callMaybeAsync(fn, context, args, transformResult) {
     if (typeof fn !== "function") {
       return Promise.resolve(
         typeof transformResult === "function" ? transformResult(undefined) : undefined
       );
+    }
+
+    if (usesPromiseApi) {
+      try {
+        const result = fn.call(context, ...args);
+        if (result && typeof result.then === "function") {
+          return result.then((value) =>
+            typeof transformResult === "function" ? transformResult(value) : value
+          );
+        }
+
+        return Promise.resolve(
+          typeof transformResult === "function" ? transformResult(result) : result
+        );
+      } catch (error) {
+        return Promise.reject(error);
+      }
     }
 
     return new Promise((resolve, reject) => {
@@ -49,11 +68,45 @@
     });
   }
 
+  function createStorageAreaAdapter(area) {
+    if (!area) return null;
+
+    const callStorage = (methodName, args, callback) => {
+      try {
+        const result = area[methodName]?.(...args);
+        if (result && typeof result.then === "function") {
+          result.then((value) => callback?.(value)).catch(() => callback?.());
+          return;
+        }
+
+        if (typeof callback === "function") {
+          callback(result);
+        }
+      } catch {
+        if (typeof callback === "function") {
+          callback();
+        }
+      }
+    };
+
+    return {
+      get(keys, callback) {
+        return callStorage("get", [keys], callback);
+      },
+      set(values, callback) {
+        return callStorage("set", [values], callback);
+      },
+      remove(keys, callback) {
+        return callStorage("remove", [keys], callback);
+      }
+    };
+  }
+
   globalThis.__dcmvBrowserApi = {
     raw: extensionApi,
 
     getStorageArea() {
-      return extensionApi?.storage?.local || null;
+      return createStorageAreaAdapter(extensionApi?.storage?.local);
     },
 
     removeAllContextMenus() {

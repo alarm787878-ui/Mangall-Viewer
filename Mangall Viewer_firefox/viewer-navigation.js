@@ -1,12 +1,29 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
+  const extensionApi =
+    globalThis.__dcmvBrowserApi?.raw ||
+    (typeof browser !== "undefined" ? browser : typeof chrome !== "undefined" ? chrome : null);
 
   modules.navigation = {
     bindEvents(targetState, deps) {
       const escHandler = (e) => {
-        if (!deps.getState()) return;
+        const state = deps.getState();
+        if (!state) return;
 
         if (e.key === "Escape") {
+          state.lastEscapeKeyAt = Date.now();
+          e.preventDefault();
+          e.stopPropagation();
+          deps.closeViewer();
+        }
+      };
+
+      const escKeyupHandler = (e) => {
+        const state = deps.getState();
+        if (!state) return;
+
+        if (e.key === "Escape") {
+          state.lastEscapeKeyAt = Date.now();
           e.preventDefault();
           e.stopPropagation();
           deps.closeViewer();
@@ -26,6 +43,8 @@
           return;
         }
 
+        if (handleViewerShortcut(e)) return;
+
         const logicalNav = deps.getLogicalNavigationForKey(e);
         if (!logicalNav) return;
 
@@ -39,18 +58,15 @@
         deps.goPrev();
       };
 
-      const keyup = (e) => {
-        if (!deps.getState()) return;
-
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      };
-
       const wheel = (e) => {
         const state = deps.getState();
         if (!state) return;
+        if (e.isTrusted === false) return;
+
+        if (canScrollInsideCommentPanel(e.target, e.deltaY)) {
+          e.stopPropagation();
+          return;
+        }
 
         if (state.isPagePickerOpen) {
           if (state.pagePicker.contains(e.target)) {
@@ -108,8 +124,41 @@
         deps.syncImageLoadingBarPosition();
       };
 
+      const fullscreenchange = () => {
+        const state = deps.getState();
+        if (!state) return;
+
+        const isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        if (!isFullscreen && state.ignoreNextFullscreenExitClose) {
+          state.ignoreNextFullscreenExitClose = false;
+        }
+
+        deps.syncHudTrigger();
+        deps.syncImageLoadingBarPosition();
+      };
+
+      // 업데이트 알림 버블: 표시 위치는 viewer-ui.js, 사라지는 조건은 여기에서 모아 관리한다.
+      const hideUpdateNotice = () => {
+        const state = deps.getState();
+        if (!state?.settingsUpdateNotice) return;
+        deps.markSettingsUpdateNoticeSeen?.();
+        state.settingsUpdateNotice.classList.add("dcmv-settings-update-notice-hidden");
+        deps.syncHudVisibility?.();
+      };
+
+      const updateNoticeTargetMouseenter = () => {
+        hideUpdateNotice();
+      };
+
+      const hideUpdateNoticeForAction = (action) => {
+        if (action === "toggle-page-picker" || action === "toggle-settings-menu") {
+          hideUpdateNotice();
+        }
+      };
+
       const hudMouseenter = (e) => {
         if (!deps.getState()) return;
+        hideUpdateNotice();
         deps.rememberPointerPosition(e.clientX, e.clientY);
         deps.updateHudHoverState(deps.isPointerInsideHudTrigger(e.clientX, e.clientY));
         clearTimeout(deps.getState().cursorHideTimer);
@@ -121,6 +170,105 @@
         deps.rememberPointerPosition(e.clientX, e.clientY);
         deps.updateHudHoverState(deps.isPointerInsideHudTrigger(e.clientX, e.clientY));
         deps.scheduleCursorHide();
+      };
+
+      const toggleFullscreen = (actionEl) => {
+        const state = deps.getState();
+        if (!state) return;
+        actionEl?.blur?.();
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          state.ignoreNextFullscreenExitClose = true;
+          (document.exitFullscreen || document.webkitExitFullscreen)?.call(document).catch(() => {});
+          return;
+        }
+
+        const el = document.documentElement;
+        const req = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (typeof req === "function") {
+          req.call(el).catch(() => {});
+        }
+      };
+
+      const resetPairingFromCurrent = (actionEl) => {
+        const state = deps.getState();
+        if (!state) return;
+        const anchor = deps.getCurrentAnchorIndex();
+        const resetIndex = Math.max(0, anchor);
+        const resetIndices = Array.isArray(state.manualPairingResetIndices)
+          ? [...state.manualPairingResetIndices]
+          : [];
+        const existingIndex = resetIndices.indexOf(resetIndex);
+        const isSameResetPoint = existingIndex >= 0;
+
+        if (isSameResetPoint) {
+          resetIndices.splice(existingIndex, 1);
+        } else {
+          resetIndices.push(resetIndex);
+          resetIndices.sort((a, b) => a - b);
+        }
+
+        state.manualPairingResetIndices = resetIndices;
+        deps.saveManualPairingResetIndices(resetIndices);
+        deps.syncManualResetClearVisibility();
+        actionEl?.blur?.();
+        deps.toggleSettingsMenu(false);
+        deps.rebuildStepsKeepingAnchor(anchor);
+        deps.renderCurrentStep();
+        deps.syncHudTrigger();
+        deps.showEdgeToast(
+          isSameResetPoint
+            ? "현재 페이지부터 단면 재설정을 해제했습니다."
+            : "현재 페이지부터 단면 재설정을 적용했습니다.",
+          2000
+        );
+      };
+
+      const toggleSpread = (actionEl) => {
+        const state = deps.getState();
+        if (!state) return;
+
+        const anchor = deps.getCurrentAnchorIndex();
+        state.spreadEnabled = !state.spreadEnabled;
+        actionEl?.blur?.();
+        deps.syncToggleVisuals();
+
+        deps.saveSettings({ spreadEnabled: state.spreadEnabled }).then(() => {
+          if (!deps.getState()) return;
+          deps.rebuildStepsKeepingAnchor(anchor);
+          deps.renderCurrentStep();
+          deps.syncHudTrigger();
+        });
+      };
+
+      const handleViewerShortcut = (e) => {
+        const state = deps.getState();
+        if (!state) return false;
+
+        const shortcut = getShortcutFromEvent(e);
+        if (!shortcut) return false;
+
+        if (shortcut === state.fullscreenShortcut) {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleFullscreen();
+          return true;
+        }
+
+        if (shortcut === state.spreadShortcut) {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleSpread();
+          return true;
+        }
+
+        if (shortcut === state.resetPairingShortcut) {
+          e.preventDefault();
+          e.stopPropagation();
+          resetPairingFromCurrent();
+          return true;
+        }
+
+        return false;
       };
 
       const click = (e) => {
@@ -140,6 +288,7 @@
         if (!actionEl) return;
 
         const action = actionEl.getAttribute("data-dcmv-action");
+        hideUpdateNoticeForAction(action);
 
         if (action === "prev" || action === "next") {
           const direction = deps.getLogicalNavigationForOverlayButton(action);
@@ -150,24 +299,16 @@
           }
         } else if (action === "refresh") {
           deps.runManualRefresh().catch(() => {});
+        } else if (action === "toggle-fullscreen") {
+          toggleFullscreen(actionEl);
         } else if (action === "toggle-spread") {
-          const anchor = deps.getCurrentAnchorIndex();
-          state.spreadEnabled = !state.spreadEnabled;
-          actionEl.blur();
-          deps.syncToggleVisuals();
-
-          deps.saveSettings(deps.getSettingsSnapshot()).then(() => {
-            if (!deps.getState()) return;
-            deps.rebuildStepsKeepingAnchor(anchor);
-            deps.renderCurrentStep();
-            deps.syncHudTrigger();
-          });
+          toggleSpread(actionEl);
         } else if (action === "toggle-rtl") {
           state.readingDirectionRTL = !state.readingDirectionRTL;
           actionEl.blur();
           deps.syncToggleVisuals();
 
-          deps.saveSettings(deps.getSettingsSnapshot()).then(() => {
+          deps.saveSettings({ readingDirectionRTL: state.readingDirectionRTL }).then(() => {
             if (!deps.getState()) return;
             deps.renderCurrentStep();
             deps.syncHudTrigger();
@@ -179,7 +320,7 @@
           actionEl.blur();
           deps.syncToggleVisuals();
 
-          deps.saveSettings(deps.getSettingsSnapshot()).then(() => {
+          deps.saveSettings({ firstPageSingle: state.firstPageSingle }).then(() => {
             if (!deps.getState()) return;
             deps.rebuildStepsKeepingAnchor(anchor);
             deps.renderCurrentStep();
@@ -193,42 +334,29 @@
           state.useWasd = !state.useWasd;
           actionEl.blur();
           deps.syncToggleVisuals();
-          deps.saveSettings(deps.getSettingsSnapshot());
+          deps.saveSettings({ useWasd: state.useWasd });
         } else if (action === "toggle-auto-first-page-adjust") {
           state.autoFirstPageAdjust = !state.autoFirstPageAdjust;
           actionEl.blur();
           deps.syncToggleVisuals();
-          deps.saveSettings(deps.getSettingsSnapshot());
-        } else if (action === "reset-pairing-from-current") {
-          const anchor = deps.getCurrentAnchorIndex();
-          const resetIndex = Math.max(0, anchor);
-          const resetIndices = Array.isArray(state.manualPairingResetIndices)
-            ? [...state.manualPairingResetIndices]
-            : [];
-          const existingIndex = resetIndices.indexOf(resetIndex);
-          const isSameResetPoint = existingIndex >= 0;
-
-          if (isSameResetPoint) {
-            resetIndices.splice(existingIndex, 1);
-          } else {
-            resetIndices.push(resetIndex);
-            resetIndices.sort((a, b) => a - b);
-          }
-
-          state.manualPairingResetIndices = resetIndices;
-          deps.saveManualPairingResetIndices(resetIndices);
-          deps.syncManualResetClearVisibility();
+          deps.saveSettings({ autoFirstPageAdjust: state.autoFirstPageAdjust });
+        } else if (action === "toggle-corner-counter") {
+          state.showCornerPageCounter = !state.showCornerPageCounter;
           actionEl.blur();
-          deps.toggleSettingsMenu(false);
-          deps.rebuildStepsKeepingAnchor(anchor);
-          deps.renderCurrentStep();
-          deps.syncHudTrigger();
-          deps.showEdgeToast(
-            isSameResetPoint
-              ? "현재 페이지부터 단면 재설정을 해제했습니다."
-              : "현재 페이지부터 단면 재설정을 적용했습니다.",
-            2000
-          );
+          deps.syncToggleVisuals();
+          deps.updateCornerPageCounter?.();
+          deps.saveSettings({ showCornerPageCounter: state.showCornerPageCounter });
+        } else if (action === "toggle-advanced-settings") {
+          const settingsSlider = state.settingsMenu.querySelector(".dcmv-settings-slider");
+          if (settingsSlider) {
+            settingsSlider.classList.toggle("dcmv-settings-show-advanced");
+          }
+          actionEl.blur();
+        } else if (action === "open-extension-options") {
+          actionEl.blur();
+          extensionApi?.runtime?.sendMessage?.({ type: "DCMV_OPEN_OPTIONS" });
+        } else if (action === "reset-pairing-from-current") {
+          resetPairingFromCurrent(actionEl);
         } else if (action === "reset-pairing-from-current-clear") {
           const anchor = deps.getCurrentAnchorIndex();
           const hadManualPairingReset =
@@ -246,7 +374,7 @@
             deps.showEdgeToast("단면 재설정을 모두 초기화했습니다.", 2000);
           }
         } else if (action === "close") {
-          deps.closeViewer();
+          deps.closeViewer({ forceExitFullscreen: true });
         } else if (action === "go-to-page") {
           const pageIndex = Number(actionEl.getAttribute("data-dcmv-page-index"));
           if (!Number.isInteger(pageIndex)) return;
@@ -274,36 +402,39 @@
       };
 
       targetState.handlers = {
+        escHandler,
+        escKeyupHandler,
         keydown,
-        keyup,
-        winKeydown: escHandler,
         wheel,
         mousemove,
         docMouseleave,
         resize,
+        fullscreenchange,
         hudMouseenter,
         hudMouseleave,
+        updateNoticeTargetMouseenter,
         click,
         imageClick
       };
 
-      document.addEventListener("keydown", keydown, true);
-      document.addEventListener("keyup", keyup, true);
       window.addEventListener("keydown", escHandler, true);
+      window.addEventListener("keyup", escKeyupHandler, true);
+      document.addEventListener("keydown", keydown, true);
       document.addEventListener("mousemove", mousemove, true);
       document.addEventListener("mouseleave", docMouseleave, true);
       window.addEventListener("resize", resize, true);
+      document.addEventListener("fullscreenchange", fullscreenchange, true);
 
       targetState.overlay.addEventListener("wheel", wheel, { passive: false });
       targetState.overlay.addEventListener("click", click, true);
       targetState.overlay.addEventListener("click", imageClick, true);
       targetState.hud.addEventListener("mouseenter", hudMouseenter);
       targetState.hud.addEventListener("mouseleave", hudMouseleave);
+      targetState.pageCounter?.addEventListener("mouseenter", updateNoticeTargetMouseenter);
     },
 
     shouldIgnoreKeydown(e) {
       if (e.defaultPrevented) return true;
-      if (e.ctrlKey || e.altKey || e.metaKey) return true;
 
       const target = e.target;
       if (!(target instanceof Element)) return false;
@@ -312,6 +443,8 @@
     },
 
     getLogicalNavigationForKey(targetState, e) {
+      if (e.ctrlKey || e.altKey || e.metaKey) return null;
+
       const key = String(e.key || "").toLowerCase();
 
       if (key === " " || key === "spacebar") {
@@ -406,6 +539,11 @@
       targetState.settingsButton.classList.toggle("dcmv-page-counter-open", nextOpen);
 
       if (nextOpen) {
+        // Reset to basic settings when opening menu
+        const settingsSlider = targetState.settingsMenu.querySelector(".dcmv-settings-slider");
+        if (settingsSlider) {
+          settingsSlider.classList.remove("dcmv-settings-show-advanced");
+        }
         deps.syncManualResetClearVisibility();
         deps.togglePagePicker(false);
         targetState.hud.classList.add(deps.hudVisibleClass);
@@ -494,7 +632,7 @@
         return true;
       }
 
-      if (key === "enter" || key === " " || key === "spacebar") {
+      if (key === "enter" || key === " " || key === "space" || key === "spacebar") {
         deps.goToPageIndex(targetState.pagePickerSelectedIndex);
         return true;
       }
@@ -514,4 +652,37 @@
       return modules.layout?.goToPageIndex?.(targetState, pageIndex, options, deps);
     }
   };
+
+  function canScrollInsideCommentPanel(target, deltaY) {
+    if (!(target instanceof Element)) return false;
+
+    const panel =
+      target.closest(".dcmv-dc-comment-panel-list") ||
+      target.closest(".dcmv-dc-comment-host");
+    if (!(panel instanceof HTMLElement)) return false;
+    return true;
+  }
+
+  function getShortcutFromEvent(e) {
+    const key = String(e.key || "");
+    if (!key) return "";
+    if (["Control", "Alt", "Shift", "Meta"].includes(key)) return "";
+
+    const parts = [];
+    if (e.ctrlKey) parts.push("ctrl");
+    if (e.altKey) parts.push("alt");
+    if (e.shiftKey) parts.push("shift");
+    if (e.metaKey) parts.push("meta");
+
+    if (key.length === 1) {
+      parts.push(key.toLowerCase());
+      return parts.join("+");
+    }
+
+    const normalized = key.toLowerCase();
+    if (normalized === " ") parts.push("space");
+    else if (normalized === "spacebar") parts.push("space");
+    else parts.push(normalized);
+    return parts.join("+");
+  }
 })();

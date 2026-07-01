@@ -1,5 +1,118 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
+  function preloadImageItem(item) {
+    if (!item || item.failed) return;
+
+    const src = item.resolvedSrc || item.src || "";
+    if (src) {
+      const img = new Image();
+      img.src = src;
+    }
+  }
+
+  function waitForViewerImageReady(imageElement, item) {
+    if (!(imageElement instanceof HTMLImageElement)) {
+      return Promise.resolve();
+    }
+
+    const primarySrc = item?.resolvedSrc || item?.src || "";
+    const fallbackSrc =
+      item?.resolvedSrc && item?.src && item.resolvedSrc !== item.src
+        ? item.src
+        : "";
+
+    if (!primarySrc) {
+      return Promise.resolve();
+    }
+
+    const resolveAfterDecode = (resolve) => {
+      if (typeof imageElement.decode !== "function") {
+        resolve();
+        return;
+      }
+
+      // Firefox에서는 load 직후 바로 교체하면 디코딩 타이밍 때문에 순간 깜빡일 수 있다.
+      imageElement.decode().then(resolve, resolve);
+    };
+
+    return new Promise((resolve) => {
+      let didTryFallback = false;
+
+      const cleanup = () => {
+        imageElement.removeEventListener("load", handleLoad);
+        imageElement.removeEventListener("error", handleError);
+      };
+
+      const handleLoad = () => {
+        cleanup();
+        resolveAfterDecode(resolve);
+      };
+
+      const handleError = () => {
+        if (!didTryFallback && fallbackSrc) {
+          didTryFallback = true;
+          imageElement.src = fallbackSrc;
+          return;
+        }
+
+        cleanup();
+        resolve();
+      };
+
+      imageElement.addEventListener("load", handleLoad);
+      imageElement.addEventListener("error", handleError);
+      imageElement.src = primarySrc;
+
+      if (imageElement.complete && imageElement.naturalWidth) {
+        handleLoad();
+      }
+    });
+  }
+
+  function cleanupEmptyPlaceholders(stage) {
+    if (!(stage instanceof HTMLElement)) return;
+
+    const emptyPlaceholders = stage.querySelectorAll(":scope > .dcmv-empty");
+    for (const emptyPlaceholder of emptyPlaceholders) {
+      emptyPlaceholder.remove();
+    }
+  }
+
+  function recoverRenderableCurrentStep(targetState, deps = {}) {
+    if (!targetState) return null;
+
+    if (targetState.currentStep?.images?.length) {
+      return targetState.currentStep;
+    }
+
+    let steps = Array.isArray(targetState.steps) ? targetState.steps : [];
+    if (!steps.length && targetState.sourceItems?.length && typeof deps.buildAllSteps === "function") {
+      targetState.steps = deps.buildAllSteps();
+      steps = Array.isArray(targetState.steps) ? targetState.steps : [];
+    }
+
+    if (!steps.length) return null;
+
+    const clampedIndex = Math.max(
+      0,
+      Math.min(Number(targetState.stepIndex) || 0, steps.length - 1)
+    );
+    const indexedStep = steps[clampedIndex];
+
+    if (indexedStep?.images?.length) {
+      targetState.stepIndex = clampedIndex;
+      targetState.currentStep = indexedStep;
+      return indexedStep;
+    }
+
+    const fallbackIndex = steps.findIndex((step) => step?.images?.length);
+    if (fallbackIndex < 0) return null;
+
+    // currentStep이 잠깐 비어도 전체 페이지가 있으면 가능한 기존 step에서 복구한다.
+    targetState.stepIndex = fallbackIndex;
+    targetState.currentStep = steps[fallbackIndex];
+    return targetState.currentStep;
+  }
 
   modules.layout = {
     rebuildStepsKeepingAnchor(targetState, anchorIndex, deps) {
@@ -135,8 +248,8 @@
 
       const resetIndices = Array.isArray(targetState?.manualPairingResetIndices)
         ? targetState.manualPairingResetIndices
-            .filter((index) => Number.isInteger(index) && index > 0)
-            .sort((a, b) => a - b)
+          .filter((index) => Number.isInteger(index) && index >= 0)
+          .sort((a, b) => a - b)
         : [];
 
       if (!resetIndices.length) {
@@ -245,18 +358,29 @@
     renderCurrentStep(targetState, deps) {
       if (!targetState) return;
 
-      const step = targetState.currentStep;
+      const step = recoverRenderableCurrentStep(targetState, deps);
 
       if (!step || !step.images.length) {
+        const hasKnownPages = !!(
+          targetState.totalCount || targetState.sourceItems?.length
+        );
+        if (hasKnownPages) {
+          cleanupEmptyPlaceholders(targetState.stage);
+          return;
+        }
+
         const empty = document.createElement("div");
         empty.className = "dcmv-empty";
         empty.textContent = "표시할 페이지가 없습니다.";
         targetState.stage.replaceChildren(empty);
-        targetState.pageCounter.textContent = `0 / ${targetState.totalCount}`;
+        if (targetState.pageCounterLabel) {
+          targetState.pageCounterLabel.textContent = `0 / ${targetState.totalCount}`;
+        }
         return;
       }
 
-      targetState.stage.replaceChildren();
+      targetState.renderSeq = (targetState.renderSeq || 0) + 1;
+      const renderSeq = targetState.renderSeq;
 
       const wrap = document.createElement("div");
       wrap.className = `dcmv-page-wrap ${
@@ -272,7 +396,10 @@
         renderImages = [step.images[1], step.images[0]];
       }
 
-      for (const item of renderImages) {
+      const imageReadyPromises = [];
+
+      for (let renderIndex = 0; renderIndex < renderImages.length; renderIndex += 1) {
+        const item = renderImages[renderIndex];
         if (item.failed) {
           const failedBox = document.createElement("div");
           failedBox.className = "dcmv-image dcmv-image-failed";
@@ -291,14 +418,14 @@
 
         const img = document.createElement("img");
         img.className = "dcmv-image";
-        img.src = item.resolvedSrc || item.src || "";
         img.alt = item.alt || "";
         img.draggable = false;
+        imageReadyPromises.push(waitForViewerImageReady(img, item));
 
-        const logFirstViewerImageLoad = () => {
+        const runInitialAutoAfterFirstViewerImageLoad = () => {
           const state = deps.getState();
-          if (!state || state.hasLoggedFirstViewerImageLoad) return;
-          state.hasLoggedFirstViewerImageLoad = true;
+          if (!state || state.hasRunInitialAutoAfterFirstImageLoadTrigger) return;
+          state.hasRunInitialAutoAfterFirstImageLoadTrigger = true;
           queueMicrotask(() => {
             deps.runInitialAutoWhenReady("첫 이미지 로드 완료");
           });
@@ -306,25 +433,15 @@
 
         if (img.complete && img.naturalWidth) {
           queueMicrotask(() => {
-            logFirstViewerImageLoad();
+            runInitialAutoAfterFirstViewerImageLoad();
             deps.syncImageLoadingBarPosition();
           });
         } else {
           img.addEventListener(
             "load",
             () => {
-              logFirstViewerImageLoad();
+              runInitialAutoAfterFirstViewerImageLoad();
               deps.syncImageLoadingBarPosition();
-            },
-            { once: true }
-          );
-        }
-
-        if (item.resolvedSrc && item.src && item.resolvedSrc !== item.src) {
-          img.addEventListener(
-            "error",
-            () => {
-              img.src = item.src;
             },
             { once: true }
           );
@@ -338,7 +455,11 @@
         wrap.appendChild(img);
       }
 
-      targetState.stage.appendChild(wrap);
+      Promise.all(imageReadyPromises).then(() => {
+        if (!targetState.stage || targetState.renderSeq !== renderSeq) return;
+        targetState.stage.replaceChildren(wrap);
+        deps.syncImageLoadingBarPosition();
+      });
       deps.renderPageCounter(step);
       deps.syncManualResetClearVisibility();
       deps.syncImageLoadingBarPosition();
@@ -369,24 +490,24 @@
       for (const idx of targets) {
         for (const item of targetState.steps[idx].images) {
           if (item.failed) continue;
-          const img = new Image();
-          img.src = item.resolvedSrc || item.src || "";
+          preloadImageItem(item);
         }
       }
     },
 
     getPrimaryVisiblePageIndex(targetState) {
-      if (!targetState || !targetState.currentStep || !targetState.currentStep.images.length) {
+      const currentStep = recoverRenderableCurrentStep(targetState);
+      if (!currentStep?.images?.length) {
         return 0;
       }
 
-      if (targetState.currentStep.images.length === 1) {
-        return targetState.currentStep.images[0].index;
+      if (currentStep.images.length === 1) {
+        return currentStep.images[0].index;
       }
 
       return targetState.readingDirectionRTL
-        ? targetState.currentStep.images[targetState.currentStep.images.length - 1].index
-        : targetState.currentStep.images[0].index;
+        ? currentStep.images[currentStep.images.length - 1].index
+        : currentStep.images[0].index;
     },
 
     getCurrentStepRenderUrls(targetState) {

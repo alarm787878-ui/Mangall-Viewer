@@ -43,9 +43,27 @@
     return [...adapters];
   }
 
+  function removeSiteAdapters(predicate) {
+    if (typeof predicate !== "function") return 0;
+
+    let removedCount = 0;
+    for (let i = adapters.length - 1; i >= 0; i -= 1) {
+      try {
+        if (predicate(adapters[i], i)) {
+          adapters.splice(i, 1);
+          removedCount += 1;
+        }
+      } catch {
+      }
+    }
+
+    return removedCount;
+  }
+
   globalRoot.__dcmvSiteRegistry = {
     registerSiteAdapter,
     getSiteAdapterForUrl,
-    listSiteAdapters
+    listSiteAdapters,
+    removeSiteAdapters
   };
 })();

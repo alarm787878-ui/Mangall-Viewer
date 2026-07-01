@@ -1,14 +1,14 @@
-(() => {
+﻿(() => {
   if (window.__dcmvContentScriptLoaded) {
     return;
   }
 
   // 중복 주입 시 메시지 리스너와 UI가 여러 번 붙는 것을 방지한다.
   window.__dcmvContentScriptLoaded = true;
-  document.documentElement.setAttribute("data-dcmv-ready", "true");
 
   const OVERLAY_ID = "dcmv-overlay";
   const LOCK_CLASS = "dcmv-lock-scroll";
+  const HIDE_SCROLLBAR_CLASS = "dcmv-hide-scrollbar";
   const HUD_VISIBLE_CLASS = "dcmv-hud-visible";
   const TOGGLE_ACTIVE_CLASS = "dcmv-toggle-active";
   const CURSOR_HIDDEN_CLASS = "dcmv-cursor-hidden";
@@ -18,11 +18,17 @@
     spreadEnabled: "spreadEnabled",
     firstPageSingle: "firstPageSingle",
     useWasd: "useWasd",
-    autoFirstPageAdjust: "autoFirstPageAdjust"
+    autoFirstPageAdjust: "autoFirstPageAdjust",
+    showCornerPageCounter: "showCornerPageCounter",
+    fullscreenShortcut: "fullscreenShortcut",
+    spreadShortcut: "spreadShortcut",
+    resetPairingShortcut: "resetPairingShortcut",
+    shouldShowInitialHudGuide: "shouldShowInitialHudGuide",
+    settingsUpdateNoticeSeenKey: "settingsUpdateNoticeSeenKey"
   };
 
   const HUD_HIDE_DELAY = 180;
-  const HUD_INITIAL_SHOW_DELAY = 500;
+  const HUD_INITIAL_SHOW_DELAY = 1000;
   const NAV_THROTTLE_MS = 220;
   const HUD_TRIGGER_MARGIN_X = 28;
   const HUD_TRIGGER_MARGIN_Y = 20;
@@ -56,8 +62,6 @@
   const EDGE_TOAST_COOLDOWN_ATTEMPTS = 3;
 
   let state = null;
-  let isHandlingOpenRequest = false;
-  let lastOpenRequestAt = 0;
   let reopenedViewerPageKey = "";
   let hasAutoLazyWakeRunInThisTabPage = false;
   let globalToastTimer = null;
@@ -66,14 +70,100 @@
   const siteRegistry = globalThis.__dcmvSiteRegistry || {};
   const extensionRuntime =
     globalThis.__dcmvBrowserApi?.raw?.runtime ||
-    globalThis.browser?.runtime ||
-    globalThis.chrome?.runtime ||
-    null;
+    (typeof browser !== "undefined" ? browser.runtime : null) ||
+    (typeof chrome !== "undefined" ? chrome.runtime : null);
   const VIEWER_DISPLAY_NAME = "만갤 뷰어";
   const CONTENT_INSTANCE_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let customAdaptersReadyPromise = null;
+  let lastKnownPageKey = getRawPageKey();
+
+  function getRawPageKey() {
+    return `${location.origin}${location.pathname}${location.search}`;
+  }
+
+  function clearReopenedViewerPageKeyOnReload() {
+    const navEntry = performance.getEntriesByType?.("navigation")?.[0];
+    if (navEntry?.type !== "reload") return;
+
+    try {
+      window.sessionStorage.removeItem(REOPENED_VIEWER_PAGE_SESSION_KEY);
+    } catch {
+    }
+    reopenedViewerPageKey = "";
+  }
+
+  function clearPageScopedSessionCache() {
+    for (const key of [
+      PAGE_SESSION_KEY,
+      FIRST_PAGE_AUTO_SESSION_KEY,
+      REOPENED_VIEWER_PAGE_SESSION_KEY,
+      MANUAL_PAIRING_RESET_SESSION_KEY
+    ]) {
+      try {
+        window.sessionStorage.removeItem(key);
+      } catch {
+      }
+    }
+
+    reopenedViewerPageKey = "";
+    hasAutoLazyWakeRunInThisTabPage = false;
+  }
+
+  function handlePageKeyChange() {
+    const currentPageKey = getRawPageKey();
+    if (lastKnownPageKey && lastKnownPageKey !== currentPageKey) {
+      // 새 회차로 주소가 바뀌면 이전 회차의 탭 임시 기록을 버린다.
+      clearPageScopedSessionCache();
+    }
+    lastKnownPageKey = currentPageKey;
+  }
+
+  function installPageKeyChangeWatcher() {
+    if (window.__dcmvPageKeyChangeWatcherInstalled) return;
+    window.__dcmvPageKeyChangeWatcherInstalled = true;
+
+    const scheduleCheck = () => {
+      setTimeout(handlePageKeyChange, 0);
+    };
+
+    for (const methodName of ["pushState", "replaceState"]) {
+      const original = history[methodName];
+      if (typeof original !== "function") continue;
+
+      history[methodName] = function (...args) {
+        const result = original.apply(this, args);
+        scheduleCheck();
+        return result;
+      };
+    }
+
+    window.addEventListener("popstate", scheduleCheck, true);
+    window.addEventListener("hashchange", scheduleCheck, true);
+    window.setInterval(handlePageKeyChange, 1000);
+  }
+
+  clearReopenedViewerPageKeyOnReload();
+  installPageKeyChangeWatcher();
 
   function getCurrentSiteAdapter() {
     return siteRegistry.getSiteAdapterForUrl?.(location.href) || null;
+  }
+
+  async function ensureCustomAdaptersLoaded() {
+    if (!runtimeModules.universalSiteSettings?.loadAndRegisterCustomAdapters) {
+      return;
+    }
+
+    if (!customAdaptersReadyPromise) {
+      customAdaptersReadyPromise =
+        runtimeModules.universalSiteSettings.loadAndRegisterCustomAdapters();
+    }
+
+    try {
+      await customAdaptersReadyPromise;
+    } catch {
+      customAdaptersReadyPromise = null;
+    }
   }
 
   function callSiteAdapter(methodName, ...args) {
@@ -99,13 +189,6 @@
   extensionRuntime?.onMessage?.addListener((message) => {
     if (!message) return;
 
-    if (message.type === "DCMV_PING") {
-      return Promise.resolve({
-        ready: true,
-        instanceId: CONTENT_INSTANCE_ID
-      });
-    }
-
     if (message.type === "DCMV_UPDATE_SETTINGS") {
       if (state) {
         state.useWasd = !!message.useWasd;
@@ -113,6 +196,18 @@
           message.autoFirstPageAdjust === undefined
             ? state.autoFirstPageAdjust
             : !!message.autoFirstPageAdjust;
+        state.fullscreenShortcut =
+          message.fullscreenShortcut === undefined
+            ? state.fullscreenShortcut
+            : String(message.fullscreenShortcut || "");
+        state.spreadShortcut =
+          message.spreadShortcut === undefined
+            ? state.spreadShortcut
+            : String(message.spreadShortcut || "");
+        state.resetPairingShortcut =
+          message.resetPairingShortcut === undefined
+            ? state.resetPairingShortcut
+            : String(message.resetPairingShortcut || "");
         syncToggleVisuals();
       }
       return;
@@ -120,112 +215,189 @@
 
     if (message.type !== "DCMV_OPEN") return;
 
-    openViewer(message).catch((err) => {
-      showErrorToast(`${VIEWER_DISPLAY_NAME} 실행 중 오류가 발생했습니다.`, 3000);
-    });
-  });
-
-  async function openViewer(message = {}) {
-    const now = Date.now();
-
-    if (isHandlingOpenRequest) {
-      return;
-    }
-
+    const wasAlreadyFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
     const existing = document.getElementById(OVERLAY_ID);
     if (existing) {
-      if (now - lastOpenRequestAt < 1500) {
-        return;
-      }
-
       closeViewer();
       return;
     }
 
-    isHandlingOpenRequest = true;
-    lastOpenRequestAt = now;
+    openViewer(message, wasAlreadyFullscreen).catch(() => {
+      showErrorToast(`${VIEWER_DISPLAY_NAME} 실행 중 오류가 발생했습니다.`, 3000);
+    });
+  });
 
+  function requestViewerDocumentFullscreen() {
+    // API 호출 전 현재 사용자 활성화(User Activation) 상태인지 확인하여 브라우저의 강제 에러 로그 기록 방지
+    if (navigator.userActivation && !navigator.userActivation.isActive) {
+      return;
+    }
+
+    const el = document.documentElement;
+    const req =
+      el.requestFullscreen ||
+      el.webkitRequestFullscreen ||
+      el.mozRequestFullScreen ||
+      el.msRequestFullscreen;
+    if (typeof req !== "function") return;
     try {
-      const root = runtimeModules.pageLoading?.findContentRoot
-        ? runtimeModules.pageLoading.findContentRoot()
-        : document.body;
-      const sourceItems = runtimeModules.pageLoading?.collectSourceItems
-        ? runtimeModules.pageLoading.collectSourceItems(root, {
-            isInsideExcludedImageCommentArea: (el) =>
-              runtimeModules.pageLoading?.isInsideExcludedImageCommentArea
-                ? runtimeModules.pageLoading.isInsideExcludedImageCommentArea(el)
-                : false,
-            isExcludedInlineDcconImage: (el) =>
-              runtimeModules.pageLoading?.isExcludedInlineDcconImage
-                ? runtimeModules.pageLoading.isExcludedInlineDcconImage(el)
-                : false,
-            isInsideOpenGraphPreview: (el) =>
-              runtimeModules.pageLoading?.isInsideOpenGraphPreview
-                ? runtimeModules.pageLoading.isInsideOpenGraphPreview(el)
-                : false,
-            parseOriginalPopUrlFromTag,
-            resolveImageUrlFromTag,
-            decodeHtml
+      const result = req.call(el);
+      if (result && typeof result.catch === "function") {
+        result
+          .then(() => {
+            lockViewerFullscreenEscape();
           })
-        : [];
-      const shouldWaitForInitialMetadata = !!(
-        runtimeModules.pageLoading?.loadLastReadPosition
-          ? runtimeModules.pageLoading.loadLastReadPosition(PAGE_SESSION_KEY)
-          : null
-      );
-      if (!sourceItems.length) {
-        showErrorToast("본문 영역에서 이미지를 찾지 못했습니다.", 3000);
-        return;
+          .catch(() => {});
+      } else {
+        lockViewerFullscreenEscape();
       }
+    } catch {
+      // no user activation, denied, or unsupported
+    }
+  }
 
-      const settings = runtimeModules.settings?.loadSettings
-        ? await runtimeModules.settings.loadSettings(STORAGE_KEYS)
-        : {};
-      const overlay = runtimeModules.ui?.buildOverlay
-        ? runtimeModules.ui.buildOverlay({
-            overlayId: OVERLAY_ID
-          })
-        : (() => {
-            throw new Error("viewer-ui.js가 로드되지 않았습니다.");
-          })();
-      document.body.appendChild(overlay);
+  function lockViewerFullscreenEscape() {
+    try {
+      const keyboard = navigator.keyboard;
+      if (!keyboard || typeof keyboard.lock !== "function") return;
 
-      document.documentElement.classList.add(LOCK_CLASS);
-      document.body.classList.add(LOCK_CLASS);
+      const result = keyboard.lock(["Escape"]);
+      if (result && typeof result.catch === "function") {
+        result.catch(() => {});
+      }
+    } catch {
+      // unsupported or denied
+    }
+  }
 
-      state = {
-        root,
-        overlay,
-        stage: overlay.querySelector(".dcmv-stage"),
-        imageLoadingBar: overlay.querySelector(".dcmv-image-loading-bar"),
-        imageLoadingBarFill: overlay.querySelector(".dcmv-image-loading-bar-fill"),
-        hud: overlay.querySelector(".dcmv-hud"),
-        hudTrigger: overlay.querySelector(".dcmv-hud-trigger"),
-        pageCounter: overlay.querySelector(".dcmv-page-counter"),
-        pageCounterLabel: overlay.querySelector(".dcmv-page-counter-label"),
-        pagePicker: overlay.querySelector(".dcmv-page-picker"),
-        pagePickerList: overlay.querySelector(".dcmv-page-picker-list"),
-        settingsMenu: overlay.querySelector(".dcmv-settings-menu"),
-        settingsButton: overlay.querySelector(".dcmv-settings-btn"),
-        settingsUseWasdButton: overlay.querySelector(".dcmv-settings-use-wasd"),
-        settingsUseWasdSwitch: overlay.querySelector(
-          ".dcmv-settings-use-wasd-switch"
-        ),
-        settingsRtlButton: overlay.querySelector(".dcmv-settings-rtl"),
-        settingsRtlValue: overlay.querySelector(".dcmv-settings-rtl-value"),
-        settingsAutoFirstPageButton: overlay.querySelector(
-          ".dcmv-settings-auto-first-page"
-        ),
-        settingsAutoFirstPageSwitch: overlay.querySelector(
-          ".dcmv-settings-auto-first-page-switch"
-        ),
-        settingsManualResetClearButton: overlay.querySelector(
-          ".dcmv-settings-manual-reset-clear"
-        ),
-        edgeToast: overlay.querySelector(".dcmv-edge-toast"),
-        refreshButton: overlay.querySelector("[data-dcmv-action=\"refresh\"]"),
-        prevButton: overlay.querySelector("[data-dcmv-action=\"prev\"]"),
-        nextButton: overlay.querySelector("[data-dcmv-action=\"next\"]"),
+  function unlockViewerFullscreenEscape() {
+    try {
+      const keyboard = navigator.keyboard;
+      if (!keyboard || typeof keyboard.unlock !== "function") return;
+
+      keyboard.unlock();
+    } catch {
+      // unsupported
+    }
+  }
+
+  function exitViewerDocumentFullscreen() {
+    const doc = document;
+    unlockViewerFullscreenEscape();
+    if (!doc.fullscreenElement && !doc.webkitFullscreenElement) return;
+    const exit =
+      doc.exitFullscreen ||
+      doc.webkitExitFullscreen ||
+      doc.mozCancelFullScreen ||
+      doc.msExitFullscreen;
+    if (typeof exit !== "function") return;
+    try {
+      const result = exit.call(doc);
+      if (result && typeof result.catch === "function") {
+        result.catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  async function openViewer(message = {}, wasAlreadyFullscreen = false) {
+    handlePageKeyChange();
+    await ensureCustomAdaptersLoaded();
+
+    const existing = document.getElementById(OVERLAY_ID);
+    if (existing) {
+      closeViewer();
+      return;
+    }
+
+    const root = runtimeModules.pageLoading?.findContentRoot
+      ? runtimeModules.pageLoading.findContentRoot()
+      : document.body;
+    const settings = runtimeModules.settings?.loadSettings
+      ? await runtimeModules.settings.loadSettings(STORAGE_KEYS)
+      : {};
+
+    const sourceItems = runtimeModules.pageLoading?.collectSourceItems
+      ? await runtimeModules.pageLoading.collectSourceItems(root, {
+          isInsideExcludedImageCommentArea: (el) =>
+            runtimeModules.pageLoading?.isInsideExcludedImageCommentArea
+              ? runtimeModules.pageLoading.isInsideExcludedImageCommentArea(el)
+              : false,
+          isExcludedInlineDcconImage: (el) =>
+            runtimeModules.pageLoading?.isExcludedInlineDcconImage
+              ? runtimeModules.pageLoading.isExcludedInlineDcconImage(el)
+              : false,
+          isInsideOpenGraphPreview: (el) =>
+            runtimeModules.pageLoading?.isInsideOpenGraphPreview
+              ? runtimeModules.pageLoading.isInsideOpenGraphPreview(el)
+              : false,
+          parseOriginalPopUrlFromTag,
+          resolveImageUrlFromTag,
+          decodeHtml
+        })
+      : [];
+    if (!sourceItems.length) {
+      exitViewerDocumentFullscreen();
+      showErrorToast("본문 영역에서 이미지를 찾지 못했습니다.", 3000);
+      return;
+    }
+    const overlay = runtimeModules.ui?.buildOverlay
+      ? runtimeModules.ui.buildOverlay({
+          overlayId: OVERLAY_ID
+        })
+      : (() => {
+          throw new Error("viewer-ui.js가 로드되지 않았습니다.");
+        })();
+    document.body.appendChild(overlay);
+
+    document.documentElement.classList.add(LOCK_CLASS);
+    document.body.classList.add(LOCK_CLASS);
+    document.documentElement.classList.add(HIDE_SCROLLBAR_CLASS);
+    document.body.classList.add(HIDE_SCROLLBAR_CLASS);
+
+    state = {
+      root,
+      overlay,
+      stage: overlay.querySelector(".dcmv-stage"),
+      imageLoadingBar: overlay.querySelector(".dcmv-image-loading-bar"),
+      imageLoadingBarFill: overlay.querySelector(".dcmv-image-loading-bar-fill"),
+      hud: overlay.querySelector(".dcmv-hud"),
+      hudTrigger: overlay.querySelector(".dcmv-hud-trigger"),
+      pageCounter: overlay.querySelector(".dcmv-page-counter"),
+      pageCounterLabel: overlay.querySelector(".dcmv-page-counter-label"),
+      pagePicker: overlay.querySelector(".dcmv-page-picker"),
+      pagePickerList: overlay.querySelector(".dcmv-page-picker-list"),
+      settingsMenu: overlay.querySelector(".dcmv-settings-menu"),
+      settingsButton: overlay.querySelector(".dcmv-settings-btn"),
+      settingsUpdateNotice: overlay.querySelector(".dcmv-settings-update-notice"),
+      settingsUseWasdButton: overlay.querySelector(".dcmv-settings-use-wasd"),
+      settingsUseWasdSwitch: overlay.querySelector(
+        ".dcmv-settings-use-wasd-switch"
+      ),
+      settingsRtlButton: overlay.querySelector(".dcmv-settings-rtl"),
+      settingsRtlValue: overlay.querySelector(".dcmv-settings-rtl-value"),
+      settingsAutoFirstPageButton: overlay.querySelector(
+        ".dcmv-settings-auto-first-page"
+      ),
+      settingsAutoFirstPageSwitch: overlay.querySelector(
+        ".dcmv-settings-auto-first-page-switch"
+      ),
+      settingsCornerCounterButton: overlay.querySelector(
+        ".dcmv-settings-corner-counter"
+      ),
+      settingsCornerCounterSwitch: overlay.querySelector(
+        ".dcmv-settings-corner-counter-switch"
+      ),
+      settingsManualResetClearButton: overlay.querySelector(
+        ".dcmv-settings-manual-reset-clear"
+      ),
+      edgeToast: overlay.querySelector(".dcmv-edge-toast"),
+      cornerPageCounter: overlay.querySelector(".dcmv-corner-page-counter"),
+      refreshButton: overlay.querySelector("[data-dcmv-action=\"refresh\"]"),
+      fullscreenButton: overlay.querySelector("[data-dcmv-action=\"toggle-fullscreen\"]"),
+      prevButton: overlay.querySelector("[data-dcmv-action=\"prev\"]"),
+      nextButton: overlay.querySelector("[data-dcmv-action=\"next\"]"),
 
       firstSingleCheckbox: overlay.querySelector(".dcmv-first-single-checkbox"),
 
@@ -244,13 +416,29 @@
           ? true
           : !!settings.readingDirectionRTL,
       useWasd: settings.useWasd === undefined ? true : !!settings.useWasd,
+      fullscreenShortcut:
+        typeof settings.fullscreenShortcut === "string"
+          ? settings.fullscreenShortcut
+          : "f",
+      spreadShortcut:
+        typeof settings.spreadShortcut === "string"
+          ? settings.spreadShortcut
+          : "",
+      resetPairingShortcut:
+        typeof settings.resetPairingShortcut === "string"
+          ? settings.resetPairingShortcut
+          : "r",
       autoFirstPageAdjust:
         settings.autoFirstPageAdjust === undefined
           ? false
           : !!settings.autoFirstPageAdjust,
+      showCornerPageCounter:
+        settings.showCornerPageCounter === undefined
+          ? false
+          : !!settings.showCornerPageCounter,
+      isDcinsideSite: getCurrentSiteAdapter()?.id === "dcinside",
       manualPairingResetIndices: [],
-      shouldReuseSavedAutoFirstPageSingle: false,
-      hasLoggedFirstViewerImageLoad: false,
+      hasRunInitialAutoAfterFirstImageLoadTrigger: false,
       hasRunInitialAutoAfterFirstImageLoad: false,
       initialAutoMetadataPromise: null,
       hasPresentedInitialViewer: false,
@@ -274,8 +462,12 @@
       isCursorHidden: false,
       lastPointerX: null,
       lastPointerY: null,
+      wasAlreadyFullscreen: wasAlreadyFullscreen,
       repairTimers: [],
       isRepairRunning: false,
+      backgroundLazyWakeCount: 0,
+      shouldSkipLazyWakeScroll: false,
+      shouldShowInitialHudGuide: false,
       handlers: {},
       requestedTargetUrl: runtimeModules.pageLoading?.normalizeComparableUrl
         ? runtimeModules.pageLoading.normalizeComparableUrl(
@@ -290,66 +482,65 @@
           : String(message.targetImageUrl)
     };
 
-      state.firstSingleCheckbox.checked = state.firstPageSingle;
+    state.firstSingleCheckbox.checked = state.firstPageSingle;
 
-      syncToggleVisuals();
-      bindEvents();
+    syncToggleVisuals();
+    await prepareSettingsUpdateNotice();
+    await prepareInitialHudGuide();
+    bindEvents();
 
 
-      const savedAutoFirstPageSingle = loadSavedAutoFirstPageSingleValue();
-      if (savedAutoFirstPageSingle !== null) {
-        state.firstPageSingle = savedAutoFirstPageSingle;
-        state.shouldReuseSavedAutoFirstPageSingle = shouldWaitForInitialMetadata;
-      }
-
-      if (shouldWaitForInitialMetadata) {
-        await hydrateImageMetadata(state.sourceItems);
-      }
-
-      const savedManualPairingResetIndices = loadSavedManualPairingResetIndices();
-      if (savedManualPairingResetIndices) {
-        state.manualPairingResetIndices = savedManualPairingResetIndices;
-      }
-
-      state.firstSingleCheckbox.checked = state.firstPageSingle;
-      syncToggleVisuals();
-      rebuildStepsKeepingAnchor(resolveInitialAnchorIndex());
-      state.stage.style.visibility = state.shouldReuseSavedAutoFirstPageSingle
-        ? ""
-        : "hidden";
-      if (state.shouldReuseSavedAutoFirstPageSingle) {
-        state.hasRunInitialAutoAfterFirstImageLoad = true;
-        state.hasPresentedInitialViewer = true;
-        showHudTemporarily();
-      }
-      renderCurrentStep();
-      syncHudTrigger();
-      scheduleInitialPostLazyRefresh();
-      rememberPointerPosition(window.innerWidth / 2, window.innerHeight / 2);
-      scheduleCursorHide();
-      globalThis.__dcmvBrowserApi?.sendRuntimeMessage?.({
-        type: "DCMV_OPENED",
-        instanceId: CONTENT_INSTANCE_ID,
-        url: location.href
-      }).catch(() => undefined);
-    } finally {
-      isHandlingOpenRequest = false;
+    const savedAutoFirstPageSingle = loadSavedAutoFirstPageSingleValue();
+    if (savedAutoFirstPageSingle !== null) {
+      state.firstPageSingle = savedAutoFirstPageSingle;
     }
+
+    const savedManualPairingResetIndices = loadSavedManualPairingResetIndices();
+    if (savedManualPairingResetIndices) {
+      state.manualPairingResetIndices = savedManualPairingResetIndices;
+    }
+
+    state.firstSingleCheckbox.checked = state.firstPageSingle;
+    syncToggleVisuals();
+    rebuildStepsKeepingAnchor(resolveInitialAnchorIndex());
+    const hasAlreadyOpenedViewerOnPage = hasReopenedViewerPageKey();
+    state.shouldSkipLazyWakeScroll = hasAlreadyOpenedViewerOnPage;
+    renderCurrentStep();
+    syncHudTrigger();
+    scheduleInitialPostLazyRefresh();
+    scheduleBackgroundRepair();
+    rememberPointerPosition(window.innerWidth / 2, window.innerHeight / 2);
+    scheduleCursorHide();
   }
 
-  function closeViewer() {
+  function closeViewer(options = {}) {
     if (!state) return;
 
+    const shouldPreserveFullscreen = !!options.preserveFullscreen;
+    const shouldForceExitFullscreen = !!options.forceExitFullscreen;
+    const shouldRestorePageScroll = options.restorePageScroll !== false;
+    const shouldSavePosition = options.savePosition !== false;
+
+    if (
+      shouldForceExitFullscreen ||
+      (!shouldPreserveFullscreen && !state.wasAlreadyFullscreen)
+    ) {
+      exitViewerDocumentFullscreen();
+    }
+
     const prevState = state;
-    saveLastReadPosition(prevState);
+    if (shouldSavePosition) {
+      saveLastReadPosition(prevState);
+    }
     clearTimeout(prevState.hudHideTimer);
     clearTimeout(prevState.cursorHideTimer);
     clearTimeout(prevState.edgeToastTimer);
     clearRepairTimers(prevState);
+    markSettingsUpdateNoticeSeen();
 
     document.removeEventListener("keydown", prevState.handlers.keydown, true);
-    document.removeEventListener("keyup", prevState.handlers.keyup, true);
-    window.removeEventListener("keydown", prevState.handlers.winKeydown, true);
+    window.removeEventListener("keydown", prevState.handlers.escHandler, true);
+    window.removeEventListener("keyup", prevState.handlers.escKeyupHandler, true);
     document.removeEventListener("mousemove", prevState.handlers.mousemove, true);
     document.removeEventListener(
       "mouseleave",
@@ -357,7 +548,11 @@
       true
     );
     window.removeEventListener("resize", prevState.handlers.resize, true);
-
+    document.removeEventListener(
+      "fullscreenchange",
+      prevState.handlers.fullscreenchange,
+      true
+    );
     prevState.overlay.removeEventListener("wheel", prevState.handlers.wheel);
     prevState.overlay.removeEventListener("click", prevState.handlers.click, true);
     prevState.overlay.removeEventListener(
@@ -367,6 +562,10 @@
     );
     prevState.hud.removeEventListener("mouseenter", prevState.handlers.hudMouseenter);
     prevState.hud.removeEventListener("mouseleave", prevState.handlers.hudMouseleave);
+    prevState.pageCounter?.removeEventListener(
+      "mouseenter",
+      prevState.handlers.updateNoticeTargetMouseenter
+    );
 
     if (prevState.overlay?.parentNode) {
       prevState.overlay.remove();
@@ -374,8 +573,14 @@
 
     document.documentElement.classList.remove(LOCK_CLASS);
     document.body.classList.remove(LOCK_CLASS);
+    document.documentElement.classList.remove(HIDE_SCROLLBAR_CLASS);
+    document.body.classList.remove(HIDE_SCROLLBAR_CLASS);
 
     state = null;
+
+    if (!shouldRestorePageScroll) {
+      return;
+    }
 
     requestAnimationFrame(() => {
       const root = prevState.root || document.body;
@@ -392,11 +597,16 @@
 
       let el = item.element;
 
-      if (!el || !document.contains(el)) {
+      const isElementStillAttached = (target) => {
+        const ownerDocument = target?.ownerDocument || document;
+        return !!target && ownerDocument.contains(target);
+      };
+
+      if (!isElementStillAttached(el)) {
         el = findElementForSourceItem(root, item);
       }
 
-      if (el && document.contains(el)) {
+      if (isElementStillAttached(el)) {
         el.scrollIntoView({
           behavior: "auto",
           block: "center",
@@ -430,6 +640,7 @@
       goNext,
       goPrev,
       isPointerInsideHudTrigger,
+      syncHudVisibility,
       updateHudHoverState,
       showCursor,
       hasPointerMovedSignificantly,
@@ -452,22 +663,150 @@
         spreadEnabled: state.spreadEnabled,
         firstPageSingle: state.firstPageSingle,
         useWasd: state.useWasd,
-        autoFirstPageAdjust: state.autoFirstPageAdjust
+        fullscreenShortcut: state.fullscreenShortcut,
+        spreadShortcut: state.spreadShortcut,
+        resetPairingShortcut: state.resetPairingShortcut,
+        autoFirstPageAdjust: state.autoFirstPageAdjust,
+        showCornerPageCounter: state.showCornerPageCounter
       }),
+      requestFullscreen: requestViewerDocumentFullscreen,
+      exitFullscreen: exitViewerDocumentFullscreen,
       rebuildStepsKeepingAnchor,
       renderCurrentStep,
+      updateCornerPageCounter,
       saveManualPairingResetIndices,
       syncManualResetClearVisibility,
       showEdgeToast,
       clearSavedManualPairingResetIndices,
+      markSettingsUpdateNoticeSeen,
       goToPageIndex,
       getLogicalNavigationForViewportSide
     });
   }
 
+  function getStorageArea() {
+    return runtimeModules.settings?.getStorageArea?.() ?? null;
+  }
+
+  function getStorageValue(key) {
+    return new Promise((resolve) => {
+      const storageArea = getStorageArea();
+      if (!storageArea) {
+        resolve(undefined);
+        return;
+      }
+
+      storageArea.get([key], (result) => {
+        resolve(result?.[key]);
+      });
+    });
+  }
+
+  function setStorageValue(key, value) {
+    return new Promise((resolve) => {
+      const storageArea = getStorageArea();
+      if (!storageArea) {
+        resolve();
+        return;
+      }
+
+      storageArea.set({ [key]: value }, () => resolve());
+    });
+  }
+
+  async function prepareSettingsUpdateNotice() {
+    const notice = state?.settingsUpdateNotice;
+    if (!notice) return;
+    state.settingsUpdateNoticeSeenKey = "";
+
+    const noticeMessage = notice.textContent.trim();
+    const noticeVersion = notice.dataset.noticeVersion || "";
+    const currentVersion = getCurrentExtensionVersion();
+
+    if (!noticeVersion || !noticeMessage || noticeVersion !== currentVersion) {
+      notice.classList.add("dcmv-settings-update-notice-hidden");
+      return;
+    }
+
+    const storageKey = STORAGE_KEYS.settingsUpdateNoticeSeenKey;
+    const noticeKey = `${noticeVersion}|${noticeMessage}`;
+    const seenNoticeKey = await getStorageValue(storageKey);
+    if (seenNoticeKey === noticeKey) {
+      notice.classList.add("dcmv-settings-update-notice-hidden");
+      return;
+    }
+
+    state.settingsUpdateNoticeSeenKey = noticeKey;
+    notice.classList.remove("dcmv-settings-update-notice-hidden");
+  }
+
+  function markSettingsUpdateNoticeSeen() {
+    const notice = state?.settingsUpdateNotice;
+    const noticeKey = state?.settingsUpdateNoticeSeenKey;
+    if (!notice || !noticeKey) return Promise.resolve();
+    if (notice.classList.contains("dcmv-settings-update-notice-hidden")) {
+      return Promise.resolve();
+    }
+
+    // 실제로 말풍선이 사라지는 시점에만 "봤음"으로 저장한다.
+    state.settingsUpdateNoticeSeenKey = "";
+    return setStorageValue(STORAGE_KEYS.settingsUpdateNoticeSeenKey, noticeKey);
+  }
+
+  async function prepareInitialHudGuide() {
+    if (!state) return;
+
+    const storageKey = STORAGE_KEYS.shouldShowInitialHudGuide;
+    const shouldShow = await getStorageValue(storageKey);
+    state.shouldShowInitialHudGuide = shouldShow === true;
+
+    if (state.shouldShowInitialHudGuide) {
+      await setStorageValue(storageKey, false);
+    }
+  }
+
+  function getCurrentExtensionVersion() {
+    try {
+      return extensionRuntime?.getManifest?.().version || "";
+    } catch {
+      return "";
+    }
+  }
+
   function setRefreshButtonState(isRunning) {
     if (runtimeModules.ui?.setRefreshButtonState) {
       runtimeModules.ui.setRefreshButtonState(state, isRunning);
+    }
+  }
+
+  async function restartViewerSoftly() {
+    if (!state || state.isManualRefreshRunning) return;
+
+    const previousState = state;
+    const anchorItem = getPrimaryAnchorItem(previousState);
+    const targetImageUrl =
+      anchorItem?.originalPopUrl || anchorItem?.resolvedSrc || anchorItem?.src || "";
+    const wasAlreadyFullscreen = previousState.wasAlreadyFullscreen;
+
+    previousState.isManualRefreshRunning = true;
+    setRefreshButtonState(true);
+
+    try {
+      await wakeLazyImages(previousState.root);
+      saveLastReadPosition(previousState);
+      closeViewer({
+        preserveFullscreen: true,
+        restorePageScroll: false,
+        savePosition: false
+      });
+      await openViewer({ targetImageUrl }, wasAlreadyFullscreen);
+      showEdgeToast("새로고침 완료", 1200);
+    } catch {
+      if (state === previousState) {
+        previousState.isManualRefreshRunning = false;
+        setRefreshButtonState(false);
+      }
+      showErrorToast(`${VIEWER_DISPLAY_NAME} 새로고침 중 오류가 발생했습니다.`, 3000);
     }
   }
 
@@ -570,8 +909,12 @@
   }
 
   function showHudTemporarily() {
+    if (!state?.shouldShowInitialHudGuide) return;
+    state.shouldShowInitialHudGuide = false;
     runtimeModules.hud?.showHudTemporarily?.(state, {
-      hudVisibleClass: HUD_VISIBLE_CLASS
+      hudVisibleClass: HUD_VISIBLE_CLASS,
+      hudInitialShowDelay: HUD_INITIAL_SHOW_DELAY,
+      syncHudVisibility
     });
   }
 
@@ -660,11 +1003,26 @@
   }
 
   function getCurrentAnchorIndex() {
-    if (!state || !state.currentStep || !state.currentStep.images.length) {
-      return 0;
+    if (!state) return 0;
+
+    if (state.currentStep?.images?.length) {
+      return state.currentStep.images[0].index;
     }
 
-    return state.currentStep.images[0].index;
+    let steps = Array.isArray(state.steps) ? state.steps : [];
+    if (!steps.length && state.sourceItems?.length) {
+      state.steps = buildAllSteps();
+      steps = Array.isArray(state.steps) ? state.steps : [];
+    }
+
+    const fallbackStep = steps[state.stepIndex] || steps.find((step) => step?.images?.length);
+    if (fallbackStep?.images?.length) {
+      state.currentStep = fallbackStep;
+      state.stepIndex = Math.max(0, steps.indexOf(fallbackStep));
+      return fallbackStep.images[0].index;
+    }
+
+    return 0;
   }
 
   function getSavedImageIndex(targetState = state) {
@@ -907,8 +1265,8 @@
     }) ?? false;
   }
 
-  function syncKnownDimensionsFromDom() {
-    runtimeModules.pageLoading?.syncKnownDimensionsFromDom?.(state, {
+  async function syncKnownDimensionsFromDom() {
+    await runtimeModules.pageLoading?.syncKnownDimensionsFromDom?.(state, {
       refreshSourceItemsFromDom
     });
   }
@@ -1005,6 +1363,7 @@
     runtimeModules.navigation?.goToPageIndex?.(state, pageIndex, options, {
       navThrottleMs: NAV_THROTTLE_MS,
       getState: () => state,
+      findStepIndexForAnchorInSteps,
       rebuildStepsKeepingAnchor,
       renderCurrentStep,
       togglePagePicker,
@@ -1018,10 +1377,53 @@
       handleViewerImageError,
       syncImageLoadingBarPosition,
       runInitialAutoWhenReady,
+      buildAllSteps,
       renderPageCounter,
       syncManualResetClearVisibility,
-      preloadNearbySteps
+      preloadNearbySteps,
+      flushDeferredRepairRender,
+      refreshViewerStepLayout: () => {
+        syncHudTrigger();
+      }
     });
+    updateCornerPageCounter();
+  }
+
+  function flushDeferredRepairRender() {
+    if (!state?.deferredRepairRenderRequested) return;
+    if (state.stage?.querySelector?.(":scope > .dcmv-page-wrap[data-dcmv-pending='1']")) {
+      return;
+    }
+
+    state.deferredRepairRenderRequested = false;
+    state.deferredRepairRenderReason = "";
+
+    renderCurrentStep();
+    syncHudTrigger();
+  }
+
+  function updateCornerPageCounter() {
+    if (!state?.cornerPageCounter) return;
+
+    if (!state.showCornerPageCounter) {
+      state.cornerPageCounter.classList.remove("dcmv-corner-counter-visible");
+      return;
+    }
+
+    const step = state.currentStep;
+    const total = state.totalCount || 0;
+    let pageText;
+
+    if (!step?.images?.length) {
+      pageText = `0 / ${total}`;
+    } else if (step.images.length === 1) {
+      pageText = `${step.images[0].displayIndex} / ${total}`;
+    } else {
+      pageText = `${step.images[0].displayIndex}, ${step.images[1].displayIndex} / ${total}`;
+    }
+
+    state.cornerPageCounter.textContent = pageText;
+    state.cornerPageCounter.classList.add("dcmv-corner-counter-visible");
   }
 
   function renderPageCounter(step) {
@@ -1217,7 +1619,8 @@
     return runtimeModules.pageLoading?.findElementForSourceItem
       ? runtimeModules.pageLoading.findElementForSourceItem(root, targetItem, {
           decodeHtml,
-          parseOriginalPopUrlFromTag
+          parseOriginalPopUrlFromTag,
+          getComparableUrlsForItem
         })
       : null;
   }
@@ -1302,32 +1705,34 @@
     }, 500);
   }
 
-  function refreshSourceItemsFromDom() {
-    return runtimeModules.pageLoading?.refreshSourceItemsFromDom
-      ? runtimeModules.pageLoading.refreshSourceItemsFromDom(state, {
-          getStableItemKey,
-          collectSourceItems: (root) =>
-            runtimeModules.pageLoading?.collectSourceItems
-              ? runtimeModules.pageLoading.collectSourceItems(root, {
-                  isInsideExcludedImageCommentArea: (el) =>
-                    runtimeModules.pageLoading?.isInsideExcludedImageCommentArea
-                      ? runtimeModules.pageLoading.isInsideExcludedImageCommentArea(el)
-                      : false,
-                  isExcludedInlineDcconImage: (el) =>
-                    runtimeModules.pageLoading?.isExcludedInlineDcconImage
-                      ? runtimeModules.pageLoading.isExcludedInlineDcconImage(el)
-                      : false,
-                  isInsideOpenGraphPreview: (el) =>
-                    runtimeModules.pageLoading?.isInsideOpenGraphPreview
-                      ? runtimeModules.pageLoading.isInsideOpenGraphPreview(el)
-                      : false,
-                  parseOriginalPopUrlFromTag,
-                  resolveImageUrlFromTag,
-                  decodeHtml
-                })
-              : []
-        })
-      : { nextSourceItems: [], countChanged: false };
+  async function refreshSourceItemsFromDom() {
+    if (!runtimeModules.pageLoading?.refreshSourceItemsFromDom) {
+      return { nextSourceItems: [], countChanged: false };
+    }
+
+    return await runtimeModules.pageLoading.refreshSourceItemsFromDom(state, {
+      getStableItemKey,
+      collectSourceItems: async (root) => {
+        if (!runtimeModules.pageLoading?.collectSourceItems) return [];
+        return await runtimeModules.pageLoading.collectSourceItems(root, {
+          isInsideExcludedImageCommentArea: (el) =>
+            runtimeModules.pageLoading?.isInsideExcludedImageCommentArea
+              ? runtimeModules.pageLoading.isInsideExcludedImageCommentArea(el)
+              : false,
+          isExcludedInlineDcconImage: (el) =>
+            runtimeModules.pageLoading?.isExcludedInlineDcconImage
+              ? runtimeModules.pageLoading.isExcludedInlineDcconImage(el)
+              : false,
+          isInsideOpenGraphPreview: (el) =>
+            runtimeModules.pageLoading?.isInsideOpenGraphPreview
+              ? runtimeModules.pageLoading.isInsideOpenGraphPreview(el)
+              : false,
+          parseOriginalPopUrlFromTag,
+          resolveImageUrlFromTag,
+          decodeHtml
+        });
+      }
+    });
   }
 
   function applyRefreshedSourceItems(nextSourceItems) {
@@ -1445,36 +1850,24 @@
     });
   }
   async function runManualRefresh() {
-    await runtimeModules.pageLoading?.runManualRefresh?.(state, {
-      getState: () => state,
-      clearSavedManualPairingResetIndices,
-      setRefreshButtonState,
-      getCurrentAnchorIndex,
-      getCurrentStepRenderUrls,
-      wakeLazyImages,
-      refreshSourceItemsFromDom,
-      applyRefreshedSourceItems,
-      hydrateImageMetadata,
-      retryMissingItems,
-      applyRebuiltLayoutIfChanged,
-      rebuildStepsKeepingAnchor,
-      didCurrentStepRenderUrlsChange,
-      syncCurrentStepImagesFromSourceItems,
-      renderCurrentStep,
-      syncHudTrigger,
-      showEdgeToast
-    });
+    await restartViewerSoftly();
   }
   // 뷰어에서 디시 이미지를 누락 없이 수집할 수 있도록, 지연 로딩된 본문 이미지를 한 번 깨우는 용도.
   // 페이지 스크롤을 아래로 훑으며 src가 비어 있는 이미지를 채운 뒤 원래 스크롤 위치로 복원한다.
   async function wakeLazyImages(root) {
     if (runtimeModules.pageLoading?.wakeLazyImages) {
+      if (state?.shouldSkipLazyWakeScroll && !state?.isManualRefreshRunning) {
+        pokeLazyImages(root);
+        return;
+      }
+
       await runtimeModules.pageLoading.wakeLazyImages(root, {
         lazyWakeScrollDelayMs: LAZY_WAKE_SCROLL_DELAY_MS,
         lazyWakeScrollStep: LAZY_WAKE_SCROLL_STEP,
         pokeLazyImages,
         sleep
       });
+      rememberReopenedViewerPageKey();
     }
   }
 
@@ -1502,5 +1895,8 @@
       ? commonUtils.isLandscapeLike(width, height)
       : null;
   }
+
+  // 커스텀 사이트 어댑터를 미리 등록해두면 툴바/팝업 실행 흐름이 더 안정적이다.
+  ensureCustomAdaptersLoaded().catch(() => {});
 
 })();

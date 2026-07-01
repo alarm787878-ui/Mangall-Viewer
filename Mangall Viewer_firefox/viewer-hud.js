@@ -5,8 +5,20 @@
     syncHudTrigger(targetState, deps) {
       if (!targetState) return;
 
-      const hudStyle = window.getComputedStyle(targetState.hud);
-      const bottom = Number.parseFloat(hudStyle.bottom) || 0;
+      if (!targetState.hud.dataset.dcmvBaseBottom) {
+        const initialHudStyle = window.getComputedStyle(targetState.hud);
+        targetState.hud.dataset.dcmvBaseBottom = `${Number.parseFloat(initialHudStyle.bottom) || 0}`;
+      }
+
+      const baseBottom = Number.parseFloat(targetState.hud.dataset.dcmvBaseBottom || "0") || 0;
+      const commentOffset =
+        Number.parseFloat(
+          window.getComputedStyle(document.documentElement)
+            .getPropertyValue("--dcmv-hud-bottom-offset")
+            .trim() || "0"
+        ) || 0;
+      const bottom = baseBottom + commentOffset;
+      targetState.hud.style.bottom = `${bottom}px`;
       const width = targetState.hud.offsetWidth;
       const height = targetState.hud.offsetHeight;
       const left = Math.max(0, (window.innerWidth - width) / 2);
@@ -31,6 +43,10 @@
       trigger.style.height = `${triggerHeight}px`;
 
       if (targetState.lastPointerX == null || targetState.lastPointerY == null) {
+        if (isSettingsUpdateNoticeVisible(targetState)) {
+          targetState.hud.classList.add(deps.hudVisibleClass);
+          clearTimeout(targetState.hudHideTimer);
+        }
         return;
       }
 
@@ -40,7 +56,7 @@
       );
       targetState.isPointerOverHudZone = inside;
 
-      if (inside) {
+      if (inside || isSettingsUpdateNoticeVisible(targetState)) {
         targetState.hud.classList.add(deps.hudVisibleClass);
         clearTimeout(targetState.hudHideTimer);
       }
@@ -59,7 +75,8 @@
       const shouldShow =
         !!targetState.isPointerOverHudZone ||
         !!targetState.isPagePickerOpen ||
-        !!targetState.isSettingsMenuOpen;
+        !!targetState.isSettingsMenuOpen ||
+        isSettingsUpdateNoticeVisible(targetState);
 
       targetState.hud.classList.toggle(deps.hudVisibleClass, shouldShow);
     },
@@ -93,6 +110,10 @@
     showHudTemporarily(targetState, deps) {
       if (!targetState) return;
       targetState.hud.classList.add(deps.hudVisibleClass);
+      clearTimeout(targetState.hudHideTimer);
+      targetState.hudHideTimer = setTimeout(() => {
+        deps.syncHudVisibility?.();
+      }, deps.hudInitialShowDelay);
     },
 
     showEdgeToast(targetState, message, durationMs, options = {}) {
@@ -125,7 +146,8 @@
         if (
           targetState.isPointerOverHudZone ||
           targetState.isPagePickerOpen ||
-          targetState.isSettingsMenuOpen
+          targetState.isSettingsMenuOpen ||
+          isSettingsUpdateNoticeVisible(targetState)
         ) {
           return;
         }
@@ -166,4 +188,13 @@
       );
     }
   };
+
+  function isSettingsUpdateNoticeVisible(targetState) {
+    return !!(
+      targetState?.settingsUpdateNotice &&
+      !targetState.settingsUpdateNotice.classList.contains(
+        "dcmv-settings-update-notice-hidden"
+      )
+    );
+  }
 })();

@@ -1,6 +1,30 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
   const browserApi = globalThis.__dcmvBrowserApi;
+  const DEFAULT_SETTINGS = {
+    readingDirectionRTL: true,
+    spreadEnabled: true,
+    firstPageSingle: true,
+    useWasd: true,
+    autoFirstPageAdjust: false,
+    showCornerPageCounter: false,
+    fullscreenShortcut: "f",
+    spreadShortcut: "",
+    resetPairingShortcut: "r"
+  };
+  const SETTING_FIELDS = [
+    "readingDirectionRTL",
+    "spreadEnabled",
+    "firstPageSingle",
+    "useWasd",
+    "autoFirstPageAdjust",
+    "showCornerPageCounter"
+  ];
+  const TEXT_SETTING_FIELDS = [
+    "fullscreenShortcut",
+    "spreadShortcut",
+    "resetPairingShortcut"
+  ];
 
   modules.settings = {
     getStorageArea() {
@@ -11,7 +35,7 @@
       return new Promise((resolve) => {
         const storageArea = this.getStorageArea();
         if (!storageArea) {
-          resolve({});
+          resolve({ ...DEFAULT_SETTINGS });
           return;
         }
 
@@ -21,16 +45,36 @@
             storageKeys.spreadEnabled,
             storageKeys.firstPageSingle,
             storageKeys.useWasd,
-            storageKeys.autoFirstPageAdjust
+            storageKeys.autoFirstPageAdjust,
+            storageKeys.showCornerPageCounter,
+            storageKeys.fullscreenShortcut,
+            storageKeys.spreadShortcut,
+            storageKeys.resetPairingShortcut
           ],
           (result) => {
-            resolve({
-              readingDirectionRTL: result[storageKeys.readingDirectionRTL],
-              spreadEnabled: result[storageKeys.spreadEnabled],
-              firstPageSingle: result[storageKeys.firstPageSingle],
-              useWasd: result[storageKeys.useWasd],
-              autoFirstPageAdjust: result[storageKeys.autoFirstPageAdjust]
-            });
+            const nextSettings = {};
+
+            for (const field of SETTING_FIELDS) {
+              const storageKey = storageKeys[field];
+              if (!storageKey) continue;
+              const savedValue = result[storageKey];
+              const nextValue =
+                savedValue === undefined ? DEFAULT_SETTINGS[field] : !!savedValue;
+
+              nextSettings[field] = nextValue;
+            }
+
+            for (const field of TEXT_SETTING_FIELDS) {
+              const storageKey = storageKeys[field];
+              if (!storageKey) continue;
+              const savedValue = result[storageKey];
+              nextSettings[field] =
+                typeof savedValue === "string"
+                  ? savedValue
+                  : DEFAULT_SETTINGS[field];
+            }
+
+            resolve(nextSettings);
           }
         );
       });
@@ -44,20 +88,55 @@
           return;
         }
 
-        storageArea.set(
-          {
-            [storageKeys.readingDirectionRTL]: !!settings.readingDirectionRTL,
-            [storageKeys.spreadEnabled]: !!settings.spreadEnabled,
-            [storageKeys.firstPageSingle]: !!settings.firstPageSingle,
-            [storageKeys.useWasd]:
-              settings.useWasd === undefined ? true : !!settings.useWasd,
-            [storageKeys.autoFirstPageAdjust]:
-              settings.autoFirstPageAdjust === undefined
-                ? true
-                : !!settings.autoFirstPageAdjust
-          },
-          () => resolve()
-        );
+        // 부분 업데이트: 전달된 키-값만 저장, 기존 값은 건드리지 않음
+        const dataToSave = {};
+        for (const [field, value] of Object.entries(settings)) {
+          const storageKey = storageKeys[field];
+          if (!storageKey) continue;
+          // undefined가 아닌 값만 저장 (의도적인 삭제가 아닌 이상)
+          if (value !== undefined) {
+            dataToSave[storageKey] =
+              TEXT_SETTING_FIELDS.includes(field) ? String(value) : !!value;
+          }
+        }
+
+        // 전달된 값이 없으면 아무것도 하지 않음
+        if (Object.keys(dataToSave).length === 0) {
+          resolve();
+          return;
+        }
+
+        storageArea.set(dataToSave, () => resolve());
+      });
+    },
+
+    // 초기화/마이그레이션용: 전체 설정을 DEFAULT_SETTINGS와 병합하여 통째로 저장
+    saveAllSettings(storageKeys, settings) {
+      return new Promise((resolve) => {
+        const storageArea = this.getStorageArea();
+        if (!storageArea) {
+          resolve();
+          return;
+        }
+
+        const dataToSave = {};
+        for (const field of SETTING_FIELDS) {
+          const storageKey = storageKeys[field];
+          if (!storageKey) continue;
+          const value = settings[field];
+          dataToSave[storageKey] =
+            value === undefined ? DEFAULT_SETTINGS[field] : !!value;
+        }
+
+        for (const field of TEXT_SETTING_FIELDS) {
+          const storageKey = storageKeys[field];
+          if (!storageKey) continue;
+          const value = settings[field];
+          dataToSave[storageKey] =
+            typeof value === "string" ? value : DEFAULT_SETTINGS[field];
+        }
+
+        storageArea.set(dataToSave, () => resolve());
       });
     },
 
@@ -100,11 +179,23 @@
         deps.toggleActiveClass,
         targetState.autoFirstPageAdjust
       );
-      targetState.settingsAutoFirstPageButton.setAttribute(
+      targetState.settingsAutoFirstPageButton?.setAttribute(
         "aria-pressed",
         targetState.autoFirstPageAdjust ? "true" : "false"
       );
-
+      if (targetState.settingsCornerCounterButton) {
+        targetState.settingsCornerCounterButton.querySelector(
+          ".dcmv-settings-item-label"
+        ).textContent = "페이지 수 항상 표시";
+        targetState.settingsCornerCounterButton.classList.toggle(
+          deps.toggleActiveClass,
+          !!targetState.showCornerPageCounter
+        );
+        targetState.settingsCornerCounterButton.setAttribute(
+          "aria-pressed",
+          targetState.showCornerPageCounter ? "true" : "false"
+        );
+      }
       deps.syncManualResetClearVisibility();
       deps.syncNavButtonLabels();
     },
@@ -165,7 +256,7 @@
         const parsed = raw ? JSON.parse(raw) : null;
         if (!parsed || parsed.pageKey !== pageKey) return null;
         return Array.isArray(parsed.indices)
-          ? parsed.indices.filter((index) => Number.isInteger(index) && index > 0)
+          ? parsed.indices.filter((index) => Number.isInteger(index) && index >= 0)
           : null;
       } catch {
         return null;

@@ -1,5 +1,11 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
+  const UPDATE_NOTICE = {
+    // 이 버전에서만 업데이트 알림을 한 번 표시한다.
+    // 예: version을 "1.5.5"로 바꾸면 1.5.5에서만 이 문구가 뜬다.
+    version: "1.5.5",
+    message: "페이지 숫자 클릭으로 페이지 이동이 안되던 버그를 수정하였습니다."
+  };
 
   modules.ui = {
     buildOverlay(deps) {
@@ -35,6 +41,41 @@
         const path = document.createElementNS(svgNs, "path");
         path.setAttribute("d", pathData);
         svg.appendChild(path);
+        wrapper.appendChild(svg);
+        return wrapper;
+      }
+
+      function fullscreenIcon() {
+        const wrapper = el("span", "dcmv-fullscreen-icon");
+        wrapper.setAttribute("aria-hidden", "true");
+
+        const svg = document.createElementNS(svgNs, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("focusable", "false");
+        svg.setAttribute("aria-hidden", "true");
+
+        // 4 corner arrows (L-shape with rounded corners + diagonal)
+        const paths = [
+          "M9 3H4Q3 3 3 4V9",       // Top-left L (rounded)
+          "M3 3L10 10",             // Top-left diagonal
+          "M15 3H20Q21 3 21 4V9",   // Top-right L (rounded)
+          "M21 3L14 10",            // Top-right diagonal
+          "M3 15V20Q3 21 4 21H9",   // Bottom-left L (rounded)
+          "M3 21L10 14",            // Bottom-left diagonal
+          "M15 21H20Q21 21 21 20V15", // Bottom-right L (rounded)
+          "M21 21L14 14"            // Bottom-right diagonal
+        ];
+
+        paths.forEach(d => {
+          const path = document.createElementNS(svgNs, "path");
+          path.setAttribute("d", d);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke", "rgba(255, 255, 255, 0.92)");
+          path.setAttribute("stroke-width", "2.5");
+          path.setAttribute("stroke-linecap", "round");
+          path.setAttribute("stroke-linejoin", "round");
+          svg.appendChild(path);
+        });
         wrapper.appendChild(svg);
         return wrapper;
       }
@@ -76,6 +117,8 @@
       }
 
       const stage = el("div", "dcmv-stage");
+      const cornerPageCounter = el("div", "dcmv-corner-page-counter");
+      cornerPageCounter.setAttribute("aria-hidden", "true");
       const imageLoadingBar = el("div", "dcmv-image-loading-bar");
       const imageLoadingBarFill = el("div", "dcmv-image-loading-bar-fill");
       imageLoadingBar.appendChild(imageLoadingBarFill);
@@ -117,38 +160,30 @@
 
       const refreshButton = button("dcmv-btn", "refresh", "새로고침");
 
+      const fullscreenButton = button("dcmv-btn dcmv-fullscreen-btn", "toggle-fullscreen");
+      fullscreenButton.setAttribute("aria-label", "전체화면");
+      fullscreenButton.appendChild(fullscreenIcon());
+
       const settingsWrap = el("div", "dcmv-settings-wrap");
       const settingsButton = button("dcmv-btn dcmv-settings-btn", "toggle-settings-menu");
       settingsButton.setAttribute("aria-label", "설정");
       settingsButton.appendChild(settingsGearIcon());
+      const settingsUpdateNotice = el(
+        "div",
+        "dcmv-settings-update-notice dcmv-settings-update-notice-hidden"
+      );
+      settingsUpdateNotice.dataset.noticeVersion = UPDATE_NOTICE.version;
+      settingsUpdateNotice.textContent = UPDATE_NOTICE.message;
 
       const settingsMenu = el("div", "dcmv-settings-menu");
+
+      // Basic settings container
+      const basicSettings = el("div", "dcmv-settings-basic");
+
       const rtlButton = button("dcmv-settings-item dcmv-settings-rtl", "toggle-rtl");
       rtlButton.append(
         el("span", "dcmv-settings-item-label", "페이지 읽는 순서"),
         el("span", "dcmv-settings-item-value dcmv-settings-rtl-value", "좌←우")
-      );
-
-      const wasdButton = button(
-        "dcmv-settings-item dcmv-settings-use-wasd",
-        "toggle-use-wasd"
-      );
-      const wasdSwitch = el("span", "dcmv-settings-switch dcmv-settings-use-wasd-switch");
-      wasdSwitch.setAttribute("aria-hidden", "true");
-      wasdButton.append(el("span", "dcmv-settings-item-label", "wasd로 이동"), wasdSwitch);
-
-      const autoFirstPageButton = button(
-        "dcmv-settings-item dcmv-settings-auto-first-page",
-        "toggle-auto-first-page-adjust"
-      );
-      const autoFirstPageSwitch = el(
-        "span",
-        "dcmv-settings-switch dcmv-settings-auto-first-page-switch"
-      );
-      autoFirstPageSwitch.setAttribute("aria-hidden", "true");
-      autoFirstPageButton.append(
-        el("span", "dcmv-settings-item-label", "첫 페이지가 단면 자동 조정"),
-        autoFirstPageSwitch
       );
 
       const manualResetDivider = el("div", "dcmv-settings-divider dcmv-settings-divider-manual");
@@ -179,13 +214,89 @@
         manualPairingResetClearButton
       );
 
-      settingsMenu.append(
+      // Toggle button between basic and advanced (inside basic settings)
+      const advancedToggleButton = button(
+        "dcmv-settings-item dcmv-settings-advanced-toggle",
+        "toggle-advanced-settings"
+      );
+      advancedToggleButton.append(el("span", "dcmv-settings-item-label", "추가 설정"));
+
+      basicSettings.append(
         rtlButton,
-        wasdButton,
-        autoFirstPageButton,
+        advancedToggleButton,
         manualResetDivider,
         manualPairingResetButton
       );
+
+      // Advanced settings container (hidden by default via CSS)
+      const advancedSettings = el("div", "dcmv-settings-advanced");
+
+      const wasdButton = button(
+        "dcmv-settings-item dcmv-settings-use-wasd",
+        "toggle-use-wasd"
+      );
+      const wasdSwitch = el("span", "dcmv-settings-switch dcmv-settings-use-wasd-switch");
+      wasdSwitch.setAttribute("aria-hidden", "true");
+      wasdButton.append(el("span", "dcmv-settings-item-label", "wasd로 이동"), wasdSwitch);
+
+      const autoFirstPageButton = button(
+        "dcmv-settings-item dcmv-settings-auto-first-page",
+        "toggle-auto-first-page-adjust"
+      );
+      const autoFirstPageSwitch = el(
+        "span",
+        "dcmv-settings-switch dcmv-settings-auto-first-page-switch"
+      );
+      autoFirstPageSwitch.setAttribute("aria-hidden", "true");
+      autoFirstPageButton.append(
+        el("span", "dcmv-settings-item-label", "첫 페이지가 단면 자동 조정"),
+        autoFirstPageSwitch
+      );
+
+      const cornerCounterButton = button(
+        "dcmv-settings-item dcmv-settings-corner-counter",
+        "toggle-corner-counter"
+      );
+      const cornerCounterSwitch = el(
+        "span",
+        "dcmv-settings-switch dcmv-settings-corner-counter-switch"
+      );
+      cornerCounterSwitch.setAttribute("aria-hidden", "true");
+      cornerCounterButton.append(
+        el("span", "dcmv-settings-item-label", "페이지 수 항상 표시"),
+        cornerCounterSwitch
+      );
+
+      const openExtensionOptionsButton = button(
+        "dcmv-settings-item dcmv-settings-open-extension-options",
+        "open-extension-options"
+      );
+      openExtensionOptionsButton.append(
+        el("span", "dcmv-settings-item-label", "확장프로그램 옵션")
+      );
+
+      // Back button at the bottom of advanced panel
+      const backToBasicButton = button(
+        "dcmv-settings-item dcmv-settings-back-to-basic",
+        "toggle-advanced-settings"
+      );
+      backToBasicButton.append(el("span", "dcmv-settings-item-label", "기본 설정"));
+
+      advancedSettings.append(
+        wasdButton,
+        autoFirstPageButton,
+        cornerCounterButton,
+        openExtensionOptionsButton,
+        backToBasicButton
+      );
+
+      // Wrap both panels in a slider container for animation
+      const settingsSlider = el("div", "dcmv-settings-slider");
+      settingsSlider.append(basicSettings, advancedSettings);
+
+      settingsMenu.append(settingsSlider);
+      // 업데이트 알림 버블은 이번 안내 내용과 관련된 페이지 버튼 옆에 붙인다.
+      pagePickerWrap.appendChild(settingsUpdateNotice);
       settingsWrap.append(settingsButton, settingsMenu);
 
       const closeButton = button("dcmv-btn", "close", "닫기");
@@ -202,11 +313,12 @@
         firstSingleButton,
         pagePickerWrap,
         refreshButton,
+        fullscreenButton,
         settingsWrap,
         closeButton,
         nextButton
       );
-      overlay.append(stage, imageLoadingBar, edgeToast, hudTrigger, hud);
+      overlay.append(stage, cornerPageCounter, imageLoadingBar, edgeToast, hudTrigger, hud);
 
       return overlay;
     },
