@@ -740,7 +740,13 @@
           }
 
           if (maxY > 0 && currentScrollY >= maxY - 2) {
-            break;
+            // 바닥에서 추가 이미지가 붙을 시간을 준 뒤, 늘어난 새 바닥까지 계속 내려간다.
+            await deps.sleep(500);
+            const nextMaxY = Math.max(0, getScrollHeight() - getViewportHeight());
+            if (nextMaxY <= currentScrollY + 2) {
+              break;
+            }
+            stuckCount = 0;
           }
 
           y = currentScrollY + deps.lazyWakeScrollStep;
@@ -888,14 +894,23 @@
       if (!targetState) return;
 
       deps.clearRepairTimers(targetState);
+      const scheduleToken = {};
+      targetState.repairScheduleToken = scheduleToken;
 
-      for (let i = 0; i < deps.repairMaxRounds; i += 1) {
-        const delay = deps.repairInitialDelayMs + deps.repairIntervalMs * i;
+      const scheduleRound = (roundIndex, delay) => {
         const timer = setTimeout(() => {
-          deps.backgroundRepairRound().catch(() => {});
+          if (targetState.repairScheduleToken !== scheduleToken) return;
+
+          deps.backgroundRepairRound().catch(() => {}).finally(() => {
+            if (targetState.repairScheduleToken !== scheduleToken) return;
+            if (roundIndex + 1 >= deps.repairMaxRounds) return;
+            scheduleRound(roundIndex + 1, deps.repairIntervalMs);
+          });
         }, delay);
         targetState.repairTimers.push(timer);
-      }
+      };
+
+      scheduleRound(0, deps.repairInitialDelayMs);
     },
 
     async backgroundRepairRound(targetState, deps) {
@@ -1029,6 +1044,7 @@
         clearTimeout(timer);
       }
       if (targetState) {
+        targetState.repairScheduleToken = null;
         targetState.repairTimers = [];
       }
     },

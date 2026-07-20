@@ -513,8 +513,10 @@
       lastPointerY: null,
       wasAlreadyFullscreen: wasAlreadyFullscreen,
       repairTimers: [],
+      repairScheduleToken: null,
       isRepairRunning: false,
       backgroundLazyWakeCount: 0,
+      lazyWakeScrollQueue: null,
       shouldSkipLazyWakeScroll: false,
       shouldShowInitialHudGuide: false,
       handlers: {},
@@ -1965,8 +1967,14 @@
   // 뷰어에서 디시 이미지를 누락 없이 수집할 수 있도록, 지연 로딩된 본문 이미지를 한 번 깨우는 용도.
   // 페이지 스크롤을 아래로 훑으며 src가 비어 있는 이미지를 채운 뒤 원래 스크롤 위치로 복원한다.
   async function wakeLazyImages(root) {
-    if (runtimeModules.pageLoading?.wakeLazyImages) {
-      if (state?.shouldSkipLazyWakeScroll && !state?.isManualRefreshRunning) {
+    if (!runtimeModules.pageLoading?.wakeLazyImages) return;
+
+    const targetState = state;
+    const previousScroll = targetState?.lazyWakeScrollQueue || Promise.resolve();
+    const nextScroll = previousScroll.catch(() => {}).then(async () => {
+      if (!targetState || state !== targetState) return;
+
+      if (targetState.shouldSkipLazyWakeScroll && !targetState.isManualRefreshRunning) {
         pokeLazyImages(root);
         return;
       }
@@ -1978,7 +1986,13 @@
         sleep
       });
       rememberReopenedViewerPageKey();
+    });
+
+    if (targetState) {
+      // 여러 자동 스크롤 요청이 겹치지 않고 앞 작업이 끝난 뒤 차례로 실행되게 한다.
+      targetState.lazyWakeScrollQueue = nextScroll;
     }
+    await nextScroll;
   }
 
   function pokeLazyImages(root) {

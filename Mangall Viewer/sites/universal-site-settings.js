@@ -823,16 +823,21 @@
       const prevCount = previous.items.length;
       const nextCount = next.items.length;
       const nextInfo = next.scoreInfo || {};
+      const overlap = this.getSourceItemOverlapRatio(previous.items, next.items);
       const sameSourceOverlap = previous.sourceType === next.sourceType
-        ? this.getSourceItemOverlapRatio(previous.items, next.items)
+        ? overlap
         : 0;
+
+      // 스크롤 위치에 따라 DOM 이미지가 사라져도 이미 찾은 긴 만화 목록은 유지한다.
+      if (nextCount < prevCount && overlap >= 0.7) {
+        return false;
+      }
 
       if (sameSourceOverlap >= 0.7) {
         return true;
       }
 
       if (next.sourceType === "observed") {
-        const overlap = this.getSourceItemOverlapRatio(previous.items, next.items);
         const prevDominantRatio = previous.scoreInfo?.folderStats?.dominantRatio || 0;
         const nextDominantRatio = next.scoreInfo?.folderStats?.dominantRatio || 0;
         if (overlap >= 0.8 && nextCount > prevCount && nextDominantRatio < prevDominantRatio) {
@@ -1357,6 +1362,8 @@
       const universalSiteSettings = this;
       let previousSelectedSource = null;
       let previousPageKey = "";
+      const rememberedDomImageUrls = [];
+      const rememberedDomImageUrlSet = new Set();
 
       function getCurrentPageKey() {
         return `${location.origin}${location.pathname}${location.search}`;
@@ -1364,9 +1371,20 @@
 
       function resetPageScopedGenericCache() {
         previousSelectedSource = null;
+        rememberedDomImageUrls.length = 0;
+        rememberedDomImageUrlSet.clear();
         if (typeof window !== "undefined" && Array.isArray(window.__dcmvGenericObservedImageUrls)) {
           window.__dcmvGenericObservedImageUrls.length = 0;
         }
+      }
+
+      function rememberDomImageUrl(value) {
+        const url = universalSiteSettings.normalizeImageUrl(value);
+        if (!url || rememberedDomImageUrlSet.has(url)) return;
+        if (!universalSiteSettings.shouldTreatAsContentImage(url)) return;
+
+        rememberedDomImageUrlSet.add(url);
+        rememberedDomImageUrls.push(url);
       }
 
       function countContentImages(root) {
@@ -1621,10 +1639,22 @@
             });
           };
 
-          pushCandidate(
-            universalSiteSettings.collectDomSourceItems(root, deps, this),
-            "dom"
+          const currentDomItems = universalSiteSettings.collectDomSourceItems(root, deps, this);
+          const currentDomItemsByUrl = new Map();
+          for (const item of currentDomItems) {
+            const url = universalSiteSettings.normalizeImageUrl(
+              item?.src || item?.resolvedSrc || item?.originalPopUrl || ""
+            );
+            rememberDomImageUrl(url);
+            if (url) {
+              currentDomItemsByUrl.set(url, item);
+            }
+          }
+          const rememberedDomItems = rememberedDomImageUrls.map((url, index) =>
+            currentDomItemsByUrl.get(url) ||
+            universalSiteSettings.buildSourceItem(url, null, url, index)
           );
+          pushCandidate(rememberedDomItems, "dom");
           pushCandidate(
             universalSiteSettings.collectScriptArraySourceItems(),
             "script"
@@ -1724,6 +1754,19 @@
 
               if (dataSrc && shouldReplaceExistingSrc) {
                 img.setAttribute("src", dataSrc);
+              }
+
+              if (isUsableContentImage(img, this)) {
+                rememberDomImageUrl(
+                  img.getAttribute("data-img-src") ||
+                  img.getAttribute("data-src") ||
+                  img.getAttribute("data-lazy-src") ||
+                  img.getAttribute("data-original") ||
+                  img.getAttribute("data-original-src") ||
+                  img.currentSrc ||
+                  img.getAttribute("src") ||
+                  ""
+                );
               }
             } catch {
             }
