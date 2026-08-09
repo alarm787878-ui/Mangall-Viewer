@@ -114,6 +114,16 @@
     if (lastKnownPageKey && lastKnownPageKey !== currentPageKey) {
       // 새 회차로 주소가 바뀌면 이전 회차의 탭 임시 기록을 버린다.
       clearPageScopedSessionCache();
+      callSiteAdapter("resetPageScopedCache", currentPageKey);
+
+      // SPA 방식으로 본문만 바뀌는 사이트에서는 content script가 다시 실행되지 않는다.
+      // 이전 회차의 이미지와 현재 위치를 새 회차에 남기지 않도록 뷰어를 닫는다.
+      if (state) {
+        closeViewer({
+          savePosition: false,
+          restorePageScroll: false
+        });
+      }
     }
     lastKnownPageKey = currentPageKey;
   }
@@ -329,7 +339,21 @@
 
   async function openViewer(message = {}, wasAlreadyFullscreen = false) {
     handlePageKeyChange();
+    const openedPageKey = getRawPageKey();
+    const abortOpeningForPageChange = () => {
+      if (getRawPageKey() === openedPageKey) return false;
+
+      // 뷰어가 만들어지기 전에 주소가 바뀌면 선요청한 전체화면도 정리한다.
+      if (!wasAlreadyFullscreen) {
+        exitViewerDocumentFullscreen();
+      }
+      return true;
+    };
+
     await ensureCustomAdaptersLoaded();
+
+    // 이미지 수집 중 주소가 바뀌면 이전 페이지용 뷰어를 만들지 않는다.
+    if (abortOpeningForPageChange()) return;
 
     const existing = document.getElementById(OVERLAY_ID);
     if (existing) {
@@ -363,6 +387,8 @@
           decodeHtml
         })
       : [];
+    if (abortOpeningForPageChange()) return;
+
     if (!sourceItems.length) {
       exitViewerDocumentFullscreen();
       showErrorToast("본문 영역에서 이미지를 찾지 못했습니다.", 3000);
@@ -383,6 +409,7 @@
     document.body.classList.add(HIDE_SCROLLBAR_CLASS);
 
     state = {
+      pageKey: openedPageKey,
       root,
       overlay,
       stage: overlay.querySelector(".dcmv-stage"),
@@ -574,6 +601,21 @@
     syncToggleVisuals();
     await prepareSettingsUpdateNotice();
     await prepareInitialHudGuide();
+
+    // 초기화 중 주소가 바뀌었거나 감시자가 뷰어를 닫았다면 이전 작업을 중단한다.
+    if (
+      state?.pageKey !== openedPageKey ||
+      getRawPageKey() !== openedPageKey
+    ) {
+      if (state?.pageKey === openedPageKey) {
+        closeViewer({
+          savePosition: false,
+          restorePageScroll: false
+        });
+      }
+      return;
+    }
+
     bindEvents();
 
 
@@ -880,6 +922,7 @@
     if (!state || state.isManualRefreshRunning) return;
 
     const previousState = state;
+    const previousPageKey = previousState.pageKey || getRawPageKey();
     const anchorItem = getPrimaryAnchorItem(previousState);
     const targetImageUrl =
       anchorItem?.originalPopUrl || anchorItem?.resolvedSrc || anchorItem?.src || "";
@@ -890,12 +933,22 @@
 
     try {
       await wakeLazyImages(previousState.root);
+
+      // 새 페이지로 이동하는 동안 시작된 새로고침은 이전 회차를 다시 열지 않는다.
+      if (state !== previousState || getRawPageKey() !== previousPageKey) {
+        handlePageKeyChange();
+        return;
+      }
+
       saveLastReadPosition(previousState);
       closeViewer({
         preserveFullscreen: true,
         restorePageScroll: false,
         savePosition: false
       });
+
+      if (getRawPageKey() !== previousPageKey) return;
+
       await openViewer({ targetImageUrl }, wasAlreadyFullscreen);
       showEdgeToast("새로고침 완료", 1200);
     } catch {
@@ -1641,6 +1694,13 @@
   }
 
   function saveLastReadPosition(targetState = state) {
+    if (
+      targetState?.pageKey &&
+      targetState.pageKey !== getRawPageKey()
+    ) {
+      return;
+    }
+
     if (runtimeModules.pageLoading?.saveLastReadPosition) {
       runtimeModules.pageLoading.saveLastReadPosition(targetState, {
         pageSessionKey: PAGE_SESSION_KEY,
@@ -1906,6 +1966,7 @@
 
   async function initialPostLazyRefreshRound() {
     await runtimeModules.pageLoading?.initialPostLazyRefreshRound?.(state, {
+      getState: () => state,
       refreshSourceItemsFromDom,
       getCurrentAnchorIndex,
       getCurrentStepRenderUrls,
@@ -1982,9 +2043,20 @@
       await runtimeModules.pageLoading.wakeLazyImages(root, {
         lazyWakeScrollDelayMs: LAZY_WAKE_SCROLL_DELAY_MS,
         lazyWakeScrollStep: LAZY_WAKE_SCROLL_STEP,
+        shouldContinue: () =>
+          state === targetState && getRawPageKey() === targetState.pageKey,
         pokeLazyImages,
         sleep
       });
+
+      const didPageChange = getRawPageKey() !== targetState.pageKey;
+      if (state !== targetState || didPageChange) {
+        if (didPageChange) {
+          handlePageKeyChange();
+        }
+        return;
+      }
+
       rememberReopenedViewerPageKey();
     });
 
