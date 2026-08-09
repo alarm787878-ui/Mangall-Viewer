@@ -1,5 +1,6 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
+  const VIEWER_IMAGE_READY_TIMEOUT_MS = 1000;
   function preloadImageItem(item) {
     if (!item || item.failed) return;
 
@@ -25,27 +26,40 @@
       return Promise.resolve();
     }
 
-    const resolveAfterDecode = (resolve) => {
-      if (typeof imageElement.decode !== "function") {
-        resolve();
-        return;
-      }
-
-      // Firefox에서는 load 직후 바로 교체하면 디코딩 타이밍 때문에 순간 깜빡일 수 있다.
-      imageElement.decode().then(resolve, resolve);
-    };
-
     return new Promise((resolve) => {
       let didTryFallback = false;
+      let didResolve = false;
+      let timeoutId = null;
 
       const cleanup = () => {
         imageElement.removeEventListener("load", handleLoad);
         imageElement.removeEventListener("error", handleError);
+        clearTimeout(timeoutId);
+      };
+
+      const finish = () => {
+        if (didResolve) return;
+        didResolve = true;
+        cleanup();
+        resolve();
+      };
+
+      const resolveAfterDecode = () => {
+        if (typeof imageElement.decode !== "function") {
+          finish();
+          return;
+        }
+
+        // Firefox에서는 load 직후 바로 교체하면 디코딩 타이밍 때문에 순간 깜빡일 수 있다.
+        try {
+          imageElement.decode().then(finish, finish);
+        } catch {
+          finish();
+        }
       };
 
       const handleLoad = () => {
-        cleanup();
-        resolveAfterDecode(resolve);
+        resolveAfterDecode();
       };
 
       const handleError = () => {
@@ -55,12 +69,12 @@
           return;
         }
 
-        cleanup();
-        resolve();
+        finish();
       };
 
       imageElement.addEventListener("load", handleLoad);
       imageElement.addEventListener("error", handleError);
+      timeoutId = setTimeout(finish, VIEWER_IMAGE_READY_TIMEOUT_MS);
       imageElement.src = primarySrc;
 
       if (imageElement.complete && imageElement.naturalWidth) {

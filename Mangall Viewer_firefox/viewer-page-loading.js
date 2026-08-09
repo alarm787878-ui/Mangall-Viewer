@@ -643,6 +643,10 @@
     async wakeLazyImages(root, deps) {
       if (!root) return;
 
+      const shouldContinue = () =>
+        typeof deps.shouldContinue !== "function" || deps.shouldContinue();
+      if (!shouldContinue()) return;
+
       const scrollDocument = root.ownerDocument || document;
       const scrollWindow = scrollDocument.defaultView || window;
       const scrollingElement =
@@ -713,22 +717,28 @@
       };
 
       try {
+        if (!shouldContinue()) return;
+
         for (const el of originallyLockedElements) {
           el.classList.remove("dcmv-lock-scroll");
         }
 
         scrollToY(0);
         await deps.sleep(deps.lazyWakeScrollDelayMs);
+        if (!shouldContinue()) return;
 
         let y = 0;
         let lastScrollY = -1;
         let stuckCount = 0;
 
         while (stuckCount < 2) {
+          if (!shouldContinue()) return;
+
           deps.pokeLazyImages(root);
           sendWheel(deps.lazyWakeScrollStep);
           scrollToY(y);
           await deps.sleep(deps.lazyWakeScrollDelayMs);
+          if (!shouldContinue()) return;
 
           const currentScrollY = getScrollTop();
           const maxY = Math.max(0, getScrollHeight() - getViewportHeight());
@@ -740,18 +750,31 @@
           }
 
           if (maxY > 0 && currentScrollY >= maxY - 2) {
-            break;
+            // 바닥에서 추가 이미지가 붙을 시간을 준 뒤, 늘어난 새 바닥까지 계속 내려간다.
+            await deps.sleep(500);
+            if (!shouldContinue()) return;
+
+            const nextMaxY = Math.max(0, getScrollHeight() - getViewportHeight());
+            if (nextMaxY <= currentScrollY + 2) {
+              break;
+            }
+            stuckCount = 0;
           }
 
           y = currentScrollY + deps.lazyWakeScrollStep;
         }
 
+        if (!shouldContinue()) return;
+
         deps.pokeLazyImages(root);
         scrollToY(startY);
         deps.pokeLazyImages(root);
       } finally {
-        for (const el of originallyLockedElements) {
-          el.classList.add("dcmv-lock-scroll");
+        // 뷰어가 이미 닫혔다면 새 페이지에 스크롤 잠금을 다시 붙이지 않는다.
+        if (shouldContinue()) {
+          for (const el of originallyLockedElements) {
+            el.classList.add("dcmv-lock-scroll");
+          }
         }
       }
     },
@@ -792,15 +815,16 @@
 
       deps.setImageLoadingProgress(0.38);
       await deps.wakeLazyImages(targetState.root);
+      if (deps.getState?.() !== targetState) return;
       deps.setHasAutoLazyWakeRun(true);
       deps.runInitialAutoWhenReady("lazy 깨우기 완료");
       deps.setImageLoadingProgress(0.62);
 
-      if (!deps.getState()) return;
+      if (deps.getState?.() !== targetState) return;
 
       await deps.waitForAllPagesReadyBeforeSecondPass(2000);
 
-      if (!deps.getState()) return;
+      if (deps.getState?.() !== targetState) return;
 
       deps.setImageLoadingProgress(0.82);
       await deps.initialPostLazyRefreshRound();
@@ -809,7 +833,11 @@
     async initialPostLazyRefreshRound(targetState, deps) {
       if (!targetState) return;
 
+      const isCurrentState = () => deps.getState?.() === targetState;
+      if (!isCurrentState()) return;
+
       const refreshResult = await deps.refreshSourceItemsFromDom();
+      if (!isCurrentState()) return;
       const previousCount = targetState.totalCount;
       const previousRenderUrls = deps.getCurrentStepRenderUrls();
       const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(
@@ -823,7 +851,9 @@
       const metadataResult = targetState.sourceItems.length
         ? await deps.hydrateImageMetadata(targetState.sourceItems)
         : { orientationChangedPages: [] };
+      if (!isCurrentState()) return;
       const retryResult = await deps.retryMissingItems();
+      if (!isCurrentState()) return;
 
       if (targetState.autoFirstPageAdjust && !targetState.hasUserAdjustedFirstPageSingle) {
         const previousFirstPageSingle = targetState.firstPageSingle;
@@ -888,30 +918,45 @@
       if (!targetState) return;
 
       deps.clearRepairTimers(targetState);
+      const scheduleToken = {};
+      targetState.repairScheduleToken = scheduleToken;
 
-      for (let i = 0; i < deps.repairMaxRounds; i += 1) {
-        const delay = deps.repairInitialDelayMs + deps.repairIntervalMs * i;
+      const scheduleRound = (roundIndex, delay) => {
         const timer = setTimeout(() => {
-          deps.backgroundRepairRound().catch(() => {});
+          if (targetState.repairScheduleToken !== scheduleToken) return;
+
+          deps.backgroundRepairRound().catch(() => {}).finally(() => {
+            if (targetState.repairScheduleToken !== scheduleToken) return;
+            if (roundIndex + 1 >= deps.repairMaxRounds) return;
+            scheduleRound(roundIndex + 1, deps.repairIntervalMs);
+          });
         }, delay);
         targetState.repairTimers.push(timer);
-      }
+      };
+
+      scheduleRound(0, deps.repairInitialDelayMs);
     },
 
     async backgroundRepairRound(targetState, deps) {
       if (!targetState || targetState.isRepairRunning) return;
+      const isCurrentState = () => deps.getState?.() === targetState;
+      if (!isCurrentState()) return;
+
       targetState.isRepairRunning = true;
 
       try {
         if (!targetState.backgroundLazyWakeCount) {
           await deps.wakeLazyImages(targetState.root);
+          if (!isCurrentState()) return;
           targetState.backgroundLazyWakeCount = 1;
         }
+        if (!isCurrentState()) return;
         if (!deps.getHasAutoLazyWakeRun()) {
           deps.setHasAutoLazyWakeRun(true);
         }
 
         const refreshResult = await deps.refreshSourceItemsFromDom();
+        if (!isCurrentState()) return;
         const previousRenderUrls = deps.getCurrentStepRenderUrls();
         const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(
           targetState,
@@ -921,7 +966,9 @@
 
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
         const metadataResult = await deps.hydrateImageMetadata(targetState.sourceItems);
+        if (!isCurrentState()) return;
         const retryResult = await deps.retryMissingItems();
+        if (!isCurrentState()) return;
 
         const currentAnchorIndex = deps.getCurrentAnchorIndex();
         const layoutChanged = deps.applyRebuiltLayoutIfChanged(currentAnchorIndex);
@@ -953,9 +1000,7 @@
         };
         renderOrDeferRepair(targetState, deps, renderDecision);
       } finally {
-        if (deps.getState()) {
-          deps.getState().isRepairRunning = false;
-        }
+        targetState.isRepairRunning = false;
       }
     },
 
@@ -976,12 +1021,16 @@
         let didChange = hadManualPairingReset;
 
         await deps.wakeLazyImages(targetState.root);
+        if (deps.getState?.() !== targetState) return;
         const refreshResult = await deps.refreshSourceItemsFromDom();
+        if (deps.getState?.() !== targetState) return;
         const previousRenderUrls = deps.getCurrentStepRenderUrls();
         const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(targetState);
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
         const metadataResult = await deps.hydrateImageMetadata(targetState.sourceItems);
+        if (deps.getState?.() !== targetState) return;
         const retryResult = await deps.retryMissingItems();
+        if (deps.getState?.() !== targetState) return;
 
         const currentAnchorIndex = deps.getCurrentAnchorIndex();
         const layoutChanged = deps.applyRebuiltLayoutIfChanged(currentAnchorIndex);
@@ -1029,6 +1078,7 @@
         clearTimeout(timer);
       }
       if (targetState) {
+        targetState.repairScheduleToken = null;
         targetState.repairTimers = [];
       }
     },

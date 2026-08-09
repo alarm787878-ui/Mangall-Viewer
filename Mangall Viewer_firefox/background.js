@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = {
   resetPairingShortcut: "r"
 };
 const INITIAL_HUD_GUIDE_STORAGE_KEY = "shouldShowInitialHudGuide";
+const OPTIONS_MENU_ID = "dcmv-open-options";
 
 async function syncSiteRegistry() {
   const universalSettings = globalThis.__dcmvModules?.universalSiteSettings;
@@ -27,6 +28,16 @@ async function syncSiteRegistryAndMenus() {
 
 function createContextMenu() {
   browserApi.removeAllContextMenus().catch(() => undefined).then(async () => {
+    try {
+      await browserApi.createContextMenu({
+        id: OPTIONS_MENU_ID,
+        title: "만갤 뷰어 설정 열기",
+        contexts: ["action"]
+      });
+    } catch {
+      // Firefox와 Chrome의 툴바 메뉴 지원 차이로 실패해도 사이트 메뉴 등록은 계속한다.
+    }
+
     const adapters = globalThis.__dcmvSiteRegistry?.listSiteAdapters?.() || [];
     for (const adapter of adapters) {
       if (!adapter?.menuId || !Array.isArray(adapter.documentUrlPatterns)) {
@@ -149,6 +160,11 @@ browserApi.addRuntimeStartupListener(async () => {
 });
 
 browserApi.addContextMenuClickListener((info, tab) => {
+  if (info?.menuItemId === OPTIONS_MENU_ID) {
+    extensionApi?.runtime?.openOptionsPage?.();
+    return;
+  }
+
   if (!tab?.id) return;
 
   const url = tab.url || "";

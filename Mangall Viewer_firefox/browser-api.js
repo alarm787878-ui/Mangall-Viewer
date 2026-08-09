@@ -110,15 +110,22 @@
     },
 
     removeAllContextMenus() {
-      return callMaybeAsync(extensionApi?.contextMenus?.removeAll, extensionApi?.contextMenus, []);
+      const menuApi = extensionApi?.menus || extensionApi?.contextMenus;
+      return callMaybeAsync(menuApi?.removeAll, menuApi, []);
     },
 
     createContextMenu(createProperties) {
+      const menuApi = extensionApi?.menus || extensionApi?.contextMenus;
       return callMaybeAsync(
-        extensionApi?.contextMenus?.create,
-        extensionApi?.contextMenus,
+        menuApi?.create,
+        menuApi,
         [createProperties]
       );
+    },
+
+    addContextMenuClickListener(listener) {
+      const menuApi = extensionApi?.menus || extensionApi?.contextMenus;
+      menuApi?.onClicked?.addListener?.(listener);
     },
 
     insertCss(tabId, files) {
@@ -182,9 +189,5 @@
     addRuntimeStartupListener(listener) {
       extensionApi?.runtime?.onStartup?.addListener?.(listener);
     },
-
-    addContextMenuClickListener(listener) {
-      extensionApi?.contextMenus?.onClicked?.addListener?.(listener);
-    }
   };
 })();
