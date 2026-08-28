@@ -457,6 +457,24 @@
       }
     },
 
+    getImageIdentityKey(value) {
+      const normalizedUrl = this.normalizeImageUrl(value);
+      if (!normalizedUrl) return "";
+
+      try {
+        const parsed = new URL(normalizedUrl, location.href);
+        const originalUrl = parsed.searchParams.get("fname");
+        if (originalUrl && /^https?:\/\//i.test(originalUrl)) {
+          // 직접 주소와 fname 프록시 주소를 같은 한 장으로 비교합니다.
+          // 실제 이미지 로딩에는 프록시 주소가 필요하므로 반환값을 로딩에 사용하면 안 됩니다.
+          return this.normalizeImageUrl(originalUrl);
+        }
+      } catch {
+      }
+
+      return normalizedUrl;
+    },
+
     isElementLike(value) {
       return !!value && value.nodeType === 1 && typeof value.getAttribute === "function";
     },
@@ -490,8 +508,29 @@
       };
     },
 
+    getContentFilterImageSize(imgEl) {
+      if (!this.isElementLike(imgEl)) {
+        return { width: 0, height: 0 };
+      }
+
+      const rect =
+        typeof imgEl.getBoundingClientRect === "function"
+          ? imgEl.getBoundingClientRect()
+          : null;
+      const renderedWidth = Math.round(rect?.width || 0);
+      const renderedHeight = Math.round(rect?.height || 0);
+      if (renderedWidth && renderedHeight) {
+        return { width: renderedWidth, height: renderedHeight };
+      }
+
+      // 아직 화면에 배치되지 않은 이미지는 원본 크기를 보조 기준으로 사용해
+      // 10×10 아이콘 같은 명백한 UI 이미지가 크기 미상으로 통과하지 않게 합니다.
+      return this.getKnownImageSize(imgEl);
+    },
+
     hasLargeImageSize(imgEl) {
-      const { width, height } = this.getKnownImageSize(imgEl);
+      // 본문 포함 여부는 원본 해상도가 아니라 페이지에 실제 표시되는 크기로 판단합니다.
+      const { width, height } = this.getContentFilterImageSize(imgEl);
       if (!width || !height) return false;
 
       const longSide = Math.max(width, height);
@@ -505,7 +544,7 @@
     },
 
     isTooSmallContentImage(imgEl) {
-      const { width, height } = this.getKnownImageSize(imgEl);
+      const { width, height } = this.getContentFilterImageSize(imgEl);
       if (!width || !height) return false;
 
       const longSide = Math.max(width, height);
@@ -521,7 +560,7 @@
       );
       if (!clickable) return false;
 
-      const { width, height } = this.getKnownImageSize(imgEl);
+      const { width, height } = this.getContentFilterImageSize(imgEl);
       if (!width || !height) return false;
 
       const ratio = width / height;
@@ -598,7 +637,7 @@
       const seen = new Set();
 
       for (const item of items || []) {
-        const key = this.normalizeImageUrl(
+        const key = this.getImageIdentityKey(
           item?.src || item?.resolvedSrc || item?.originalPopUrl || ""
         );
         if (key && seen.has(key)) {
@@ -647,7 +686,7 @@
       const seenUrls = new Set();
 
       for (const item of items || []) {
-        const url = this.normalizeImageUrl(item?.src || item?.resolvedSrc || item?.originalPopUrl || "");
+        const url = this.getImageIdentityKey(item?.src || item?.resolvedSrc || item?.originalPopUrl || "");
         if (!url || seenUrls.has(url)) continue;
         seenUrls.add(url);
 
@@ -671,7 +710,7 @@
     getSourceItemUrlSet(items) {
       const urls = new Set();
       for (const item of items || []) {
-        const url = this.normalizeImageUrl(item?.src || item?.resolvedSrc || item?.originalPopUrl || "");
+        const url = this.getImageIdentityKey(item?.src || item?.resolvedSrc || item?.originalPopUrl || "");
         if (url) urls.add(url);
       }
       return urls;
@@ -917,7 +956,7 @@
       let totalArea = 0;
 
       for (const item of items || []) {
-        const { width, height } = this.getKnownImageSize(item.imgEl);
+        const { width, height } = this.getContentFilterImageSize(item.imgEl);
         if (!width || !height) continue;
 
         knownSizeCount += 1;
@@ -1157,10 +1196,11 @@
         const seen = new Set();
         for (const value of list) {
           const url = this.normalizeImageUrl(value);
-          if (!this.shouldTreatAsContentImage(url) || seen.has(url)) {
+          const identityKey = this.getImageIdentityKey(url);
+          if (!this.shouldTreatAsContentImage(url) || seen.has(identityKey)) {
             continue;
           }
-          seen.add(url);
+          seen.add(identityKey);
           urls.push(url);
         }
 
@@ -1217,8 +1257,9 @@
 
       const pushUrl = (value) => {
         const url = this.normalizeImageUrl(value);
-        if (!this.shouldTreatAsContentImage(url) || seen.has(url)) return;
-        seen.add(url);
+        const identityKey = this.getImageIdentityKey(url);
+        if (!this.shouldTreatAsContentImage(url) || seen.has(identityKey)) return;
+        seen.add(identityKey);
         urls.push(url);
       };
 
@@ -1369,6 +1410,7 @@
       let observedResourceStartTime = 0;
       const rememberedDomImageUrls = [];
       const rememberedDomImageUrlSet = new Set();
+      const rememberedDomImageSourceByKey = new Map();
 
       function getCurrentPageKey() {
         return `${location.origin}${location.pathname}${location.search}`;
@@ -1378,6 +1420,7 @@
         previousSelectedSource = null;
         rememberedDomImageUrls.length = 0;
         rememberedDomImageUrlSet.clear();
+        rememberedDomImageSourceByKey.clear();
         observedResourceStartTime =
           typeof performance !== "undefined" && typeof performance.now === "function"
             ? performance.now()
@@ -1388,12 +1431,16 @@
       }
 
       function rememberDomImageUrl(value) {
-        const url = universalSiteSettings.normalizeImageUrl(value);
-        if (!url || rememberedDomImageUrlSet.has(url)) return;
-        if (!universalSiteSettings.shouldTreatAsContentImage(url)) return;
+        const sourceUrl = universalSiteSettings.normalizeImageUrl(value);
+        const identityKey = universalSiteSettings.getImageIdentityKey(sourceUrl);
+        if (!sourceUrl || !identityKey) return;
 
-        rememberedDomImageUrlSet.add(url);
-        rememberedDomImageUrls.push(url);
+        // DOM에서 이미지가 사라져도 실제로 로드됐던 주소를 사용해야 로딩이 끊기지 않습니다.
+        rememberedDomImageSourceByKey.set(identityKey, sourceUrl);
+        if (rememberedDomImageUrlSet.has(identityKey)) return;
+
+        rememberedDomImageUrlSet.add(identityKey);
+        rememberedDomImageUrls.push(identityKey);
       }
 
       function countContentImages(root) {
@@ -1462,7 +1509,7 @@
         const totalImages = root.querySelectorAll?.("img")?.length || validImages.length;
 
         for (const img of validImages) {
-          const { width, height } = universalSiteSettings.getKnownImageSize(img);
+          const { width, height } = universalSiteSettings.getContentFilterImageSize(img);
           const longSide = Math.max(width, height);
           const shortSide = Math.min(width, height);
           const area = width * height;
@@ -1655,17 +1702,21 @@
           const currentDomItems = universalSiteSettings.collectDomSourceItems(root, deps, this);
           const currentDomItemsByUrl = new Map();
           for (const item of currentDomItems) {
-            const url = universalSiteSettings.normalizeImageUrl(
-              item?.src || item?.resolvedSrc || item?.originalPopUrl || ""
-            );
-            rememberDomImageUrl(url);
-            if (url) {
-              currentDomItemsByUrl.set(url, item);
+            const sourceUrl = item?.src || item?.resolvedSrc || item?.originalPopUrl || "";
+            const identityKey = universalSiteSettings.getImageIdentityKey(sourceUrl);
+            rememberDomImageUrl(sourceUrl);
+            if (identityKey) {
+              currentDomItemsByUrl.set(identityKey, item);
             }
           }
-          const rememberedDomItems = rememberedDomImageUrls.map((url, index) =>
-            currentDomItemsByUrl.get(url) ||
-            universalSiteSettings.buildSourceItem(url, null, url, index)
+          const rememberedDomItems = rememberedDomImageUrls.map((identityKey, index) =>
+            currentDomItemsByUrl.get(identityKey) ||
+            universalSiteSettings.buildSourceItem(
+              rememberedDomImageSourceByKey.get(identityKey) || identityKey,
+              null,
+              rememberedDomImageSourceByKey.get(identityKey) || identityKey,
+              index
+            )
           );
           pushCandidate(rememberedDomItems, "dom");
           pushCandidate(
