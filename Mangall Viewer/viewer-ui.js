@@ -116,6 +116,34 @@
         return wrapper;
       }
 
+      function externalLinkIcon() {
+        const wrapper = el("span", "dcmv-settings-external-icon");
+        wrapper.setAttribute("aria-hidden", "true");
+
+        const svg = document.createElementNS(svgNs, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none");
+        svg.setAttribute("stroke", "currentColor");
+        svg.setAttribute("stroke-width", "2");
+        svg.setAttribute("stroke-linecap", "round");
+        svg.setAttribute("stroke-linejoin", "round");
+        svg.setAttribute("focusable", "false");
+        svg.setAttribute("aria-hidden", "true");
+
+        [
+          "M15 3h6v6",
+          "M10 14 21 3",
+          "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+        ].forEach((pathData) => {
+          const path = document.createElementNS(svgNs, "path");
+          path.setAttribute("d", pathData);
+          svg.appendChild(path);
+        });
+
+        wrapper.appendChild(svg);
+        return wrapper;
+      }
+
       const stage = el("div", "dcmv-stage");
       const cornerPageCounter = el("div", "dcmv-corner-page-counter");
       cornerPageCounter.setAttribute("aria-hidden", "true");
@@ -247,7 +275,10 @@
         "dcmv-settings-item dcmv-settings-advanced-toggle",
         "toggle-advanced-settings"
       );
-      advancedToggleButton.append(el("span", "dcmv-settings-item-label", "추가 설정"));
+      advancedToggleButton.append(
+        el("span", "dcmv-settings-item-label", "추가 설정"),
+        arrowIcon("M4.25 2.25 8 6l-3.75 3.75")
+      );
 
       basicSettings.append(
         rtlButton,
@@ -302,7 +333,8 @@
         "open-extension-options"
       );
       openExtensionOptionsButton.append(
-        el("span", "dcmv-settings-item-label", "확장프로그램 옵션")
+        el("span", "dcmv-settings-item-label", "확장프로그램 옵션"),
+        externalLinkIcon()
       );
 
       // Back button at the bottom of advanced panel
@@ -310,7 +342,10 @@
         "dcmv-settings-item dcmv-settings-back-to-basic",
         "toggle-advanced-settings"
       );
-      backToBasicButton.append(el("span", "dcmv-settings-item-label", "기본 설정"));
+      backToBasicButton.append(
+        arrowIcon("M7.75 2.25 4 6l3.75 3.75"),
+        el("span", "dcmv-settings-item-label", "기본 설정")
+      );
 
       advancedSettings.append(
         wasdButton,

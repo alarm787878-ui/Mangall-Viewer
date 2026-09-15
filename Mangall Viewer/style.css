@@ -577,6 +577,70 @@
   color: rgba(255, 255, 255, 0.78);
 }
 
+.dcmv-settings-external-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.5em;
+  transform: translateY(1px);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.dcmv-settings-external-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.dcmv-settings-open-extension-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 0;
+}
+
+.dcmv-settings-open-extension-options .dcmv-settings-item-label {
+  grid-column: 2;
+  grid-row: 1;
+  flex: 0 0 auto;
+}
+
+.dcmv-settings-open-extension-options .dcmv-settings-external-icon {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: start;
+}
+
+.dcmv-settings-advanced-toggle,
+.dcmv-settings-back-to-basic {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 0.5em;
+}
+
+.dcmv-settings-advanced-toggle .dcmv-settings-item-label,
+.dcmv-settings-back-to-basic .dcmv-settings-item-label {
+  grid-column: 2;
+  grid-row: 1;
+  flex: 0 0 auto;
+}
+
+.dcmv-settings-advanced-toggle .dcmv-nav-btn-arrow {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: start;
+  margin-left: 3px;
+}
+
+.dcmv-settings-back-to-basic .dcmv-nav-btn-arrow {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: end;
+  margin-right: 3px;
+}
+
 .dcmv-settings-switch::before {
   content: "OFF";
   position: absolute;

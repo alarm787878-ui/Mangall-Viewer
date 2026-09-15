@@ -18,11 +18,13 @@
     },
     findContentRoot(doc = document) {
       const selectors = [
+        "#post-article .tiptap.ProseMirror",
+        "#post-article .article-prose",
+        "#post-article",
         "#post_content",
         ".prose-container",
         ".relative.min-h-60",
-        "main article",
-        "main"
+        "main article"
       ];
 
       for (const selector of selectors) {
@@ -30,7 +32,17 @@
         if (el) return el;
       }
 
-      return doc.body;
+      // 본문 구조가 바뀌면 main 전체 대신 범용 어댑터의 이미지 영역 탐색을 사용한다.
+      const universalSettings = globalThis.__dcmvModules?.universalSiteSettings;
+      if (universalSettings?.createAdapterFromSite) {
+        const genericAdapter = universalSettings.createAdapterFromSite(
+          { id: "kone", urlPattern: "*://kone.gg/*" },
+          this.urlPattern
+        );
+        return genericAdapter.findContentRoot(doc);
+      }
+
+      return doc.querySelector("main") || doc.body;
     },
     collectSourceItems(root, deps) {
       const contentRoot =
@@ -81,7 +93,7 @@
     isInsideExcludedImageCommentArea(el) {
       if (!(el instanceof Element)) return false;
       return !!el.closest(
-        "#comments, [data-slot='popover-content'], header, nav, aside, footer"
+        "#comments, #post-comment, #post-list, [class*='comment'], [class*='coment'], [data-slot='popover-content'], header, nav, aside, footer"
       );
     },
     isExcludedInlineDcconImage() {
@@ -90,7 +102,7 @@
     isInsideOpenGraphPreview(el) {
       if (!(el instanceof Element)) return false;
       return !!el.closest(
-        "header, [data-slot='button'], [data-slot='popover-trigger'], .image-download, [data-image-float]"
+        "header, [data-slot='button'], [data-slot='popover-trigger'], .image-download, [data-image-float], img.rounded-full"
       );
     },
     convertPopUrlToDirectImageUrl(popUrl) {
