@@ -1474,6 +1474,7 @@
 
 .dcmv-dc-comment-panel-original .img_comment {
   display: block !important;
+  filter: none !important;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
