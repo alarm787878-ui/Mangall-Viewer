@@ -1,6 +1,7 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
   const dcinsideComments = globalThis.__dcmvDcinsideComments || null;
+  const dcinsideLongImageSplit = modules.dcinsideLongImageSplit || null;
   const MAX_VIEWER_UPSCALE = 1.75;
   const PAGE_SWAP_TIMEOUT_MS = 1000;
 
@@ -14,8 +15,12 @@
       return;
     }
 
+    const splitAspectRatio =
+      dcinsideLongImageSplit?.getRenderAspectRatioOverride?.(renderBox, item) || 0;
     const width = imageElement.naturalWidth || item?.width || 0;
-    const height = imageElement.naturalHeight || item?.height || 0;
+    const height = splitAspectRatio > 0
+      ? width / splitAspectRatio
+      : imageElement.naturalHeight || item?.height || 0;
 
     if (!width || !height) {
       renderBox.style.removeProperty("width");
@@ -720,6 +725,7 @@
     renderBox.className = "dcmv-image-render-box";
     renderBox.dataset.dcmvImageIndex = `${item?.index ?? ""}`;
     renderBox.dataset.dcmvDisplayType = displayType;
+    dcinsideLongImageSplit?.decorateRenderBox?.(renderBox, item);
     renderBox.appendChild(imageElement);
 
     // item.width/height 메타데이터로 즉시 사전 크기 계산 → opacity 관리 불필요
@@ -735,6 +741,12 @@
     }
 
     const renderBox = buildViewerRenderBox(imageElement, item, displayType);
+
+    // 위쪽 절반은 댓글 UI를 만들지 않는다. 원본 페이지의 아이콘을 지우거나
+    // 숨기지 않고, 아래쪽 절반에만 기존 댓글 래퍼를 연결한다.
+    if (dcinsideLongImageSplit?.shouldAttachImageComments?.(item) === false) {
+      return renderBox;
+    }
 
     if (!targetState?.isDcinsideSite || !targetState?.showImageComments || !dcinsideComments) {
       return renderBox;

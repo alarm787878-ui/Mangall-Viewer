@@ -3,8 +3,8 @@
   const UPDATE_NOTICE = {
     // 이 버전에서만 업데이트 알림을 한 번 표시한다.
     // 예: version을 "1.5.5"로 바꾸면 1.5.5에서만 이 문구가 뜬다.
-    version: "1.5.5",
-    message: "페이지 숫자 클릭으로 페이지 이동이 안되던 버그를 수정하였습니다."
+    version: "1.6.1",
+    message: "디시에서 세로로 2장 이어 붙인 이미지도 뷰어로 볼 수 있게 업데이트 했습니다. 긴 이미지 자르기 버튼을 눌러주세요. 추가 설정에서 긴 이미지가 있을 때 자동으로 자르도록 설정할 수도 있습니다."
   };
 
   modules.ui = {
@@ -150,8 +150,9 @@
       const imageLoadingBar = el("div", "dcmv-image-loading-bar");
       const imageLoadingBarFill = el("div", "dcmv-image-loading-bar-fill");
       imageLoadingBar.appendChild(imageLoadingBarFill);
-      const edgeToast = el("div", "dcmv-edge-toast");
-      edgeToast.setAttribute("aria-live", "polite");
+      const edgeToastStack = el("div", "dcmv-edge-toast-stack");
+      edgeToastStack.setAttribute("aria-live", "polite");
+      edgeToastStack.setAttribute("aria-atomic", "false");
       const hudTrigger = el("div", "dcmv-hud-trigger");
       const hud = el("div", "dcmv-hud");
 
@@ -243,6 +244,13 @@
       );
 
       const manualResetDivider = el("div", "dcmv-settings-divider dcmv-settings-divider-manual");
+      const longImageSplitButton = button(
+        "dcmv-settings-item dcmv-settings-long-image-split",
+        "split-long-images"
+      );
+      longImageSplitButton.appendChild(
+        el("span", "dcmv-settings-item-label", "긴 이미지 자르기")
+      );
       const manualPairingResetButton = el(
         "div",
         "dcmv-settings-item dcmv-settings-item-split dcmv-settings-manual-reset-wrap"
@@ -286,6 +294,7 @@
         imageCommentsButton,
         advancedToggleButton,
         manualResetDivider,
+        longImageSplitButton,
         manualPairingResetButton
       );
 
@@ -312,6 +321,20 @@
       autoFirstPageButton.append(
         el("span", "dcmv-settings-item-label", "첫 페이지가 단면 자동 조정"),
         autoFirstPageSwitch
+      );
+
+      const autoLongImageSplitButton = button(
+        "dcmv-settings-item dcmv-settings-auto-long-image-split",
+        "toggle-auto-long-image-split"
+      );
+      const autoLongImageSplitSwitch = el(
+        "span",
+        "dcmv-settings-switch dcmv-settings-auto-long-image-split-switch"
+      );
+      autoLongImageSplitSwitch.setAttribute("aria-hidden", "true");
+      autoLongImageSplitButton.append(
+        el("span", "dcmv-settings-item-label", "자동으로 긴 이미지 자르기"),
+        autoLongImageSplitSwitch
       );
 
       const cornerCounterButton = button(
@@ -350,6 +373,7 @@
       advancedSettings.append(
         wasdButton,
         autoFirstPageButton,
+        autoLongImageSplitButton,
         cornerCounterButton,
         openExtensionOptionsButton,
         backToBasicButton
@@ -360,9 +384,7 @@
       settingsSlider.append(basicSettings, advancedSettings);
 
       settingsMenu.append(settingsSlider);
-      // 업데이트 알림 버블은 이번 안내 내용과 관련된 페이지 버튼 옆에 붙인다.
-      pagePickerWrap.appendChild(settingsUpdateNotice);
-      settingsWrap.append(settingsButton, settingsMenu);
+      settingsWrap.append(settingsButton, settingsMenu, settingsUpdateNotice);
 
       const closeButton = button("dcmv-btn", "close", "닫기");
 
@@ -383,7 +405,7 @@
         closeButton,
         nextButton
       );
-      overlay.append(stage, cornerPageCounter, imageLoadingBar, edgeToast, hudTrigger, hud);
+      overlay.append(stage, cornerPageCounter, imageLoadingBar, edgeToastStack, hudTrigger, hud);
 
       return overlay;
     },

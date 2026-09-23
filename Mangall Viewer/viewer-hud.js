@@ -1,5 +1,19 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
+  const MAX_EDGE_TOASTS = 10;
+
+  function clearToastTimers(targetState, toast) {
+    const timers = targetState?.edgeToastTimers?.get(toast);
+    if (!timers) return;
+    clearTimeout(timers.hideTimer);
+    clearTimeout(timers.removeTimer);
+    targetState.edgeToastTimers.delete(toast);
+  }
+
+  function removeToast(targetState, toast) {
+    clearToastTimers(targetState, toast);
+    toast?.remove?.();
+  }
 
   modules.hud = {
     syncHudTrigger(targetState, deps) {
@@ -117,24 +131,57 @@
     },
 
     showEdgeToast(targetState, message, durationMs, options = {}) {
-      if (!targetState || !targetState.edgeToast) return;
+      const stack = targetState?.edgeToastStack;
+      if (!(stack instanceof HTMLElement)) return;
 
-      clearTimeout(targetState.edgeToastTimer);
-      targetState.edgeToast.textContent = message;
-      targetState.edgeToast.classList.toggle(
-        "dcmv-edge-toast-error",
-        !!options.isError
+      const toastKey = String(
+        options.key || `${options.isError ? "error" : "info"}:${message}`
       );
-      targetState.edgeToast.classList.add("dcmv-edge-toast-visible");
+      let toast = Array.from(stack.children).find(
+        (child) => child instanceof HTMLElement && child.dataset.dcmvToastKey === toastKey
+      );
 
-      targetState.edgeToastTimer = setTimeout(() => {
-        if (!targetState?.edgeToast) return;
-        targetState.edgeToast.classList.remove("dcmv-edge-toast-visible");
-        setTimeout(() => {
-          if (!targetState?.edgeToast) return;
-          targetState.edgeToast.classList.remove("dcmv-edge-toast-error");
-        }, 200);
-      }, durationMs);
+      if (!(toast instanceof HTMLElement)) {
+        toast = document.createElement("div");
+        toast.className = "dcmv-edge-toast";
+        toast.dataset.dcmvToastKey = toastKey;
+        stack.appendChild(toast);
+      } else {
+        clearToastTimers(targetState, toast);
+        stack.appendChild(toast);
+      }
+
+      toast.textContent = message;
+      toast.classList.toggle("dcmv-edge-toast-error", !!options.isError);
+      requestAnimationFrame(() => {
+        if (toast?.isConnected) {
+          toast.classList.add("dcmv-edge-toast-visible");
+        }
+      });
+
+      while (stack.children.length > MAX_EDGE_TOASTS) {
+        removeToast(targetState, stack.firstElementChild);
+      }
+
+      const timers = {
+        hideTimer: setTimeout(() => {
+          if (!(toast instanceof HTMLElement)) return;
+          toast.classList.remove("dcmv-edge-toast-visible");
+          timers.removeTimer = setTimeout(() => {
+            removeToast(targetState, toast);
+          }, 200);
+        }, durationMs),
+        removeTimer: null
+      };
+      targetState.edgeToastTimers.set(toast, timers);
+    },
+
+    clearEdgeToasts(targetState) {
+      const stack = targetState?.edgeToastStack;
+      if (!(stack instanceof HTMLElement)) return;
+      for (const toast of Array.from(stack.children)) {
+        removeToast(targetState, toast);
+      }
     },
 
     scheduleCursorHide(targetState, deps) {

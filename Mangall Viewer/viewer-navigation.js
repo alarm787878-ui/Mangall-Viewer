@@ -339,6 +339,21 @@
           actionEl.blur();
           deps.syncToggleVisuals();
           deps.saveSettings({ autoFirstPageAdjust: state.autoFirstPageAdjust });
+        } else if (action === "toggle-auto-long-image-split") {
+          state.autoSplitLongImages = !state.autoSplitLongImages;
+          actionEl.blur();
+          deps.syncToggleVisuals();
+          deps.saveSettings({ autoSplitLongImages: state.autoSplitLongImages });
+          // 자동 설정은 뷰어를 열 때 수동 자르기를 대신 실행하는 옵션이다.
+          // OFF로 바꿔도 현재 잘린 화면은 되돌리지 않는다.
+          if (state.autoSplitLongImages) {
+            deps
+              .setLongImageSplitActive?.(true, {
+                closeMenu: false,
+                notifyIfNoSplit: false
+              })
+              .catch(() => {});
+          }
         } else if (action === "toggle-corner-counter") {
           state.showCornerPageCounter = !state.showCornerPageCounter;
           actionEl.blur();
@@ -376,6 +391,9 @@
         } else if (action === "open-extension-options") {
           actionEl.blur();
           chrome.runtime?.sendMessage?.({ type: "DCMV_OPEN_OPTIONS" });
+        } else if (action === "split-long-images") {
+          actionEl.blur();
+          deps.setLongImageSplitActive?.(!state.longImageSplitActive).catch(() => {});
         } else if (action === "reset-pairing-from-current") {
           resetPairingFromCurrent(actionEl);
         } else if (action === "reset-pairing-from-current-clear") {

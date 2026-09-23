@@ -19,6 +19,7 @@
     firstPageSingle: "firstPageSingle",
     useWasd: "useWasd",
     autoFirstPageAdjust: "autoFirstPageAdjust",
+    autoSplitLongImages: "autoSplitLongImages",
     showImageComments: "showImageComments",
     alwaysShowComments: "alwaysShowComments",
     autoFullscreen: "autoFullscreen",
@@ -408,6 +409,7 @@
     document.documentElement.classList.add(HIDE_SCROLLBAR_CLASS);
     document.body.classList.add(HIDE_SCROLLBAR_CLASS);
 
+    const isDcinsideSite = getCurrentSiteAdapter()?.id === "dcinside";
     state = {
       pageKey: openedPageKey,
       root,
@@ -436,6 +438,15 @@
       settingsAutoFirstPageSwitch: overlay.querySelector(
         ".dcmv-settings-auto-first-page-switch"
       ),
+      settingsAutoLongImageSplitButton: overlay.querySelector(
+        ".dcmv-settings-auto-long-image-split"
+      ),
+      settingsAutoLongImageSplitSwitch: overlay.querySelector(
+        ".dcmv-settings-auto-long-image-split-switch"
+      ),
+      settingsLongImageSplitButton: overlay.querySelector(
+        ".dcmv-settings-long-image-split"
+      ),
       settingsCornerCounterButton: overlay.querySelector(
         ".dcmv-settings-corner-counter"
       ),
@@ -451,7 +462,7 @@
       settingsManualResetClearButton: overlay.querySelector(
         ".dcmv-settings-manual-reset-clear"
       ),
-      edgeToast: overlay.querySelector(".dcmv-edge-toast"),
+      edgeToastStack: overlay.querySelector(".dcmv-edge-toast-stack"),
       cornerPageCounter: overlay.querySelector(".dcmv-corner-page-counter"),
       refreshButton: overlay.querySelector("[data-dcmv-action=\"refresh\"]"),
       fullscreenButton: overlay.querySelector("[data-dcmv-action=\"toggle-fullscreen\"]"),
@@ -463,6 +474,7 @@
       spreadToggle: overlay.querySelector(".dcmv-toggle-spread"),
       firstSingleToggle: overlay.querySelector(".dcmv-toggle-first-single"),
 
+      physicalSourceItems: isDcinsideSite ? sourceItems : null,
       sourceItems,
       totalCount: sourceItems.length,
 
@@ -491,6 +503,13 @@
         settings.autoFirstPageAdjust === undefined
           ? false
           : !!settings.autoFirstPageAdjust,
+      autoSplitLongImages:
+        settings.autoSplitLongImages === undefined
+          ? false
+          : !!settings.autoSplitLongImages,
+      longImageSplitActive: false,
+      isLongImageSplitRunning: false,
+      hasScheduledAutoLongImageSplit: false,
       showImageComments:
         settings.showImageComments === undefined
           ? false
@@ -511,7 +530,7 @@
         settings.showCornerPageCounter === undefined
           ? false
           : !!settings.showCornerPageCounter,
-      isDcinsideSite: getCurrentSiteAdapter()?.id === "dcinside",
+      isDcinsideSite,
       manualPairingResetIndices: [],
       hasRunInitialAutoAfterFirstImageLoadTrigger: false,
       hasRunInitialAutoAfterFirstImageLoad: false,
@@ -526,7 +545,7 @@
       navLockedUntil: 0,
       hudHideTimer: null,
       cursorHideTimer: null,
-      edgeToastTimer: null,
+      edgeToastTimers: new Map(),
       edgeToastCooldownRemaining: EDGE_TOAST_COOLDOWN_ATTEMPTS,
       didAutoAdjustFirstPageSingle: false,
       hasUserAdjustedFirstPageSingle: false,
@@ -667,7 +686,7 @@
     }
     clearTimeout(prevState.hudHideTimer);
     clearTimeout(prevState.cursorHideTimer);
-    clearTimeout(prevState.edgeToastTimer);
+    runtimeModules.hud?.clearEdgeToasts?.(prevState);
     clearRepairTimers(prevState);
     markSettingsUpdateNoticeSeen();
 
@@ -802,6 +821,7 @@
         spreadShortcut: state.spreadShortcut,
         resetPairingShortcut: state.resetPairingShortcut,
         autoFirstPageAdjust: state.autoFirstPageAdjust,
+        autoSplitLongImages: state.autoSplitLongImages,
         showImageComments: state.showImageComments,
         alwaysShowComments: state.alwaysShowComments,
         autoFullscreen: state.autoFullscreen,
@@ -819,7 +839,8 @@
       markSettingsUpdateNoticeSeen,
       goToPageIndex,
       getLogicalNavigationForViewportSide,
-      syncDcImageCommentsForViewer
+      syncDcImageCommentsForViewer,
+      setLongImageSplitActive
     });
   }
 
@@ -1100,7 +1121,7 @@
   }
 
   function showErrorToast(message, durationMs = 3000) {
-    if (state?.edgeToast) {
+    if (state?.edgeToastStack) {
       showEdgeToast(message, durationMs, { isError: true });
       return;
     }
@@ -1177,7 +1198,7 @@
 
   function getSavedImageIndex(targetState = state) {
     const anchorItem = getPrimaryAnchorItem(targetState);
-    return anchorItem ? anchorItem.index : 0;
+    return anchorItem ? getSourceIndexForViewerItem(anchorItem) : 0;
   }
 
   function resolveInitialAnchorIndex() {
@@ -1196,7 +1217,9 @@
     const savedIndex = Number(savedPosition.index);
 
     if (Number.isInteger(savedIndex)) {
-      return Math.max(0, Math.min(savedIndex, state.sourceItems.length - 1));
+      const maxSourceIndex = Math.max(0, getPhysicalSourceItems(state).length - 1);
+      const sourceIndex = Math.max(0, Math.min(savedIndex, maxSourceIndex));
+      return findViewerIndexForSource(state.sourceItems, sourceIndex);
     }
 
     return 0;
@@ -1205,6 +1228,92 @@
   function rebuildStepsKeepingAnchor(anchorIndex) {
     runtimeModules.layout?.rebuildStepsKeepingAnchor?.(state, anchorIndex, {
       buildAllSteps
+    });
+  }
+
+  function getPhysicalSourceItems(targetState = state) {
+    return runtimeModules.dcinsideLongImageSplit?.getPhysicalSourceItems?.(targetState) ||
+      targetState?.sourceItems ||
+      [];
+  }
+
+  function createViewerSourceItems(physicalItems, splitEnabled) {
+    return runtimeModules.dcinsideLongImageSplit?.createViewerSourceItems?.(
+      physicalItems,
+      splitEnabled,
+      { isPlaceholderSize: isDcPlaceholderSize }
+    ) || { items: physicalItems, splitCount: 0 };
+  }
+
+  function getSourceIndexForViewerItem(item) {
+    return runtimeModules.dcinsideLongImageSplit?.getSourceIndexForViewerItem?.(item) ??
+      item?.index ??
+      0;
+  }
+
+  function findViewerIndexForSource(items, sourceIndex, preferredPart = "") {
+    return runtimeModules.dcinsideLongImageSplit?.findViewerIndexForSource?.(
+      items,
+      sourceIndex,
+      preferredPart
+    ) ?? Math.max(0, Math.min(sourceIndex, (items?.length || 1) - 1));
+  }
+
+  function setLongImageSplitActive(enabled, options = {}) {
+    return runtimeModules.dcinsideLongImageSplit?.setActive?.(
+      state,
+      enabled,
+      options,
+      {
+        getState: () => state,
+        getRawPageKey,
+        isPlaceholderSize: isDcPlaceholderSize,
+        hydrateImageMetadata,
+        getPrimaryAnchorItem,
+        saveManualPairingResetIndices,
+        rebuildStepsKeepingAnchor,
+        syncToggleVisuals,
+        syncManualResetClearVisibility,
+        renderCurrentStep,
+        syncHudTrigger,
+        updateCornerPageCounter,
+        toggleSettingsMenu,
+        showEdgeToast
+      }
+    ) || Promise.resolve(null);
+  }
+
+  function scheduleAutoLongImageSplitAfterInitialPaint() {
+    const targetState = state;
+    if (
+      !targetState?.isDcinsideSite ||
+      !targetState.autoSplitLongImages ||
+      targetState.longImageSplitActive ||
+      targetState.hasScheduledAutoLongImageSplit
+    ) {
+      return;
+    }
+
+    targetState.hasScheduledAutoLongImageSplit = true;
+
+    // 원본 페이지가 실제 화면에 한 번 그려진 다음 자동 자르기를 시작한다.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (
+          state !== targetState ||
+          !targetState.hasPresentedInitialViewer ||
+          !targetState.autoSplitLongImages ||
+          targetState.longImageSplitActive
+        ) {
+          return;
+        }
+
+        setLongImageSplitActive(true, {
+          notify: true,
+          notifyIfNoSplit: false,
+          closeMenu: false
+        }).catch(() => {});
+      });
     });
   }
   function getStepSignature(step) {
@@ -1360,10 +1469,21 @@
   }
 
   function saveManualPairingResetIndices(indices) {
+    // 긴 이미지 분할 여부가 바뀌어도 저장된 단면 재설정 위치가 틀어지지 않도록
+    // 화면상의 가상 페이지 번호 대신 원본 이미지 번호로 저장한다.
+    const sourceItems = Array.isArray(state?.sourceItems) ? state.sourceItems : [];
+    const persistedIndices = Array.from(
+      new Set(
+        (Array.isArray(indices) ? indices : [])
+          .map((index) => sourceItems[index])
+          .filter(Boolean)
+          .map(getSourceIndexForViewerItem)
+      )
+    ).sort((a, b) => a - b);
     runtimeModules.settings?.saveManualPairingResetIndices?.(
       getCurrentPageKey(),
       MANUAL_PAIRING_RESET_SESSION_KEY,
-      indices
+      persistedIndices
     );
   }
 
@@ -1416,7 +1536,10 @@
   }
 
   async function syncKnownDimensionsFromDom() {
-    await runtimeModules.pageLoading?.syncKnownDimensionsFromDom?.(state, {
+    const sourceState = state?.isDcinsideSite && state.physicalSourceItems
+      ? { ...state, sourceItems: state.physicalSourceItems }
+      : state;
+    await runtimeModules.pageLoading?.syncKnownDimensionsFromDom?.(sourceState, {
       refreshSourceItemsFromDom
     });
   }
@@ -1463,6 +1586,7 @@
       showHudTemporarily,
       showEdgeToast
     });
+    scheduleAutoLongImageSplitAfterInitialPaint();
   }
 
   function countLandscapeAdjacentSinglePortraitSteps(
@@ -1882,7 +2006,11 @@
       return { nextSourceItems: [], countChanged: false };
     }
 
-    return await runtimeModules.pageLoading.refreshSourceItemsFromDom(state, {
+    const sourceState = state?.isDcinsideSite && state.physicalSourceItems
+      ? { ...state, sourceItems: state.physicalSourceItems }
+      : state;
+
+    return await runtimeModules.pageLoading.refreshSourceItemsFromDom(sourceState, {
       getStableItemKey,
       collectSourceItems: async (root) => {
         if (!runtimeModules.pageLoading?.collectSourceItems) return [];
@@ -1908,7 +2036,22 @@
   }
 
   function applyRefreshedSourceItems(nextSourceItems) {
-    runtimeModules.pageLoading?.applyRefreshedSourceItems?.(state, nextSourceItems);
+    if (!state) return;
+
+    if (!state.isDcinsideSite || !runtimeModules.dcinsideLongImageSplit) {
+      runtimeModules.pageLoading?.applyRefreshedSourceItems?.(state, nextSourceItems);
+      return;
+    }
+
+    state.physicalSourceItems = nextSourceItems;
+    const displayResult = createViewerSourceItems(
+      nextSourceItems,
+      state.longImageSplitActive
+    );
+    runtimeModules.pageLoading?.applyRefreshedSourceItems?.(
+      state,
+      displayResult.items
+    );
   }
 
   async function retryMissingItems() {

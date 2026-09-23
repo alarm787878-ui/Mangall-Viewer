@@ -6,6 +6,7 @@
     firstPageSingle: true,
     useWasd: true,
     autoFirstPageAdjust: false,
+    autoSplitLongImages: false,
     showImageComments: false,
     alwaysShowComments: true,
     autoFullscreen: false,
@@ -21,6 +22,7 @@
     "firstPageSingle",
     "useWasd",
     "autoFirstPageAdjust",
+    "autoSplitLongImages",
     "showImageComments",
     "alwaysShowComments",
     "autoFullscreen",
@@ -61,6 +63,7 @@
             storageKeys.firstPageSingle,
             storageKeys.useWasd,
             storageKeys.autoFirstPageAdjust,
+            storageKeys.autoSplitLongImages,
             storageKeys.showImageComments,
             storageKeys.alwaysShowComments,
             storageKeys.autoFullscreen,
@@ -202,6 +205,33 @@
         "aria-pressed",
         targetState.autoFirstPageAdjust ? "true" : "false"
       );
+      if (targetState.settingsAutoLongImageSplitButton) {
+        targetState.settingsAutoLongImageSplitButton.hidden = !targetState.isDcinsideSite;
+        targetState.settingsAutoLongImageSplitButton.classList.toggle(
+          deps.toggleActiveClass,
+          !!targetState.autoSplitLongImages
+        );
+        targetState.settingsAutoLongImageSplitButton.setAttribute(
+          "aria-pressed",
+          targetState.autoSplitLongImages ? "true" : "false"
+        );
+      }
+      if (targetState.settingsLongImageSplitButton) {
+        targetState.settingsLongImageSplitButton.hidden = !targetState.isDcinsideSite;
+        targetState.settingsLongImageSplitButton.querySelector(
+          ".dcmv-settings-item-label"
+        ).textContent = targetState.longImageSplitActive
+          ? "긴 이미지 자르기 해제"
+          : "긴 이미지 자르기";
+        targetState.settingsLongImageSplitButton.classList.toggle(
+          deps.toggleActiveClass,
+          !!targetState.longImageSplitActive
+        );
+        targetState.settingsLongImageSplitButton.setAttribute(
+          "aria-pressed",
+          targetState.longImageSplitActive ? "true" : "false"
+        );
+      }
       if (targetState.settingsCornerCounterButton) {
         targetState.settingsCornerCounterButton.querySelector(
           ".dcmv-settings-item-label"

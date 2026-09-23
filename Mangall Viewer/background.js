@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
   firstPageSingle: true,
   useWasd: true,
   autoFirstPageAdjust: false,
+  autoSplitLongImages: false,
   showImageComments: false,
   alwaysShowComments: true,
   showCornerPageCounter: false,
@@ -72,6 +73,7 @@ function getSiteScriptFiles(adapter) {
   const files = [`sites/${adapter.id}.js`];
   if (adapter.id === "dcinside") {
     files.push("sites/dcinside-comments.js");
+    files.push("sites/dcinside-long-image-split.js");
   }
 
   return files;

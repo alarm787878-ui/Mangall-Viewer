@@ -107,6 +107,30 @@
   height: 100vh;
 }
 
+/* 원본 파일을 새로 만들지 않고 같은 이미지를 위·아래 절반으로 보여준다. */
+.dcmv-image-render-box.dcmv-image-render-box-split {
+  overflow: hidden;
+}
+
+.dcmv-image-render-box.dcmv-image-render-box-split > .dcmv-image,
+.dcmv-dc-comment-layout > .dcmv-image-render-box.dcmv-image-render-box-split > .dcmv-image {
+  position: absolute;
+  left: 0;
+  width: 100% !important;
+  height: 200% !important;
+  max-width: 100% !important;
+  max-height: none !important;
+  object-fit: fill !important;
+}
+
+.dcmv-image-render-box-split-top > .dcmv-image {
+  top: 0;
+}
+
+.dcmv-image-render-box-split-bottom > .dcmv-image {
+  top: -100%;
+}
+
 .dcmv-hud-trigger {
   position: fixed;
   z-index: 2147483646;
@@ -144,6 +168,21 @@
   pointer-events: auto;
 }
 
+.dcmv-edge-toast-stack {
+  position: fixed;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
 .dcmv-edge-toast {
   position: fixed;
   left: 50%;
@@ -165,8 +204,22 @@
   z-index: 2147483647;
 }
 
+.dcmv-edge-toast-stack > .dcmv-edge-toast {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  flex: 0 0 auto;
+  max-width: 100%;
+  transform: translateY(4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
 .dcmv-edge-toast.dcmv-edge-toast-visible {
   opacity: 1;
+}
+
+.dcmv-edge-toast-stack > .dcmv-edge-toast.dcmv-edge-toast-visible {
+  transform: translateY(0);
 }
 
 .dcmv-edge-toast.dcmv-edge-toast-error {
