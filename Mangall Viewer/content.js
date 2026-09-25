@@ -29,11 +29,13 @@
     spreadShortcut: "spreadShortcut",
     resetPairingShortcut: "resetPairingShortcut",
     shouldShowInitialHudGuide: "shouldShowInitialHudGuide",
-    settingsUpdateNoticeSeenKey: "settingsUpdateNoticeSeenKey"
+    settingsUpdateNoticeSeenKey: "settingsUpdateNoticeSeenKey",
+    longImageSplitHintPending: "longImageSplitHintPending"
   };
 
   const HUD_HIDE_DELAY = 180;
   const HUD_INITIAL_SHOW_DELAY = 1000;
+  const UPDATE_NOTICE_MIN_VISIBLE_MS = 3000;
   const NAV_THROTTLE_MS = 220;
   const HUD_TRIGGER_MARGIN_X = 28;
   const HUD_TRIGGER_MARGIN_Y = 20;
@@ -65,6 +67,7 @@
   const CURSOR_MOVE_THRESHOLD_PX = 4;
   const EDGE_TOAST_DURATION_MS = 1000;
   const EDGE_TOAST_COOLDOWN_ATTEMPTS = 3;
+  const LONG_IMAGE_SPLIT_HINT_MESSAGE = "긴 이미지 자르기 기능을 사용해보세요.";
 
   let state = null;
   let reopenedViewerPageKey = "";
@@ -444,8 +447,14 @@
       settingsAutoLongImageSplitSwitch: overlay.querySelector(
         ".dcmv-settings-auto-long-image-split-switch"
       ),
+      settingsLongImageSplitWrap: overlay.querySelector(
+        ".dcmv-settings-long-image-split-wrap"
+      ),
       settingsLongImageSplitButton: overlay.querySelector(
         ".dcmv-settings-long-image-split"
+      ),
+      settingsLongImageSplitClearButton: overlay.querySelector(
+        ".dcmv-settings-long-image-split-clear"
       ),
       settingsCornerCounterButton: overlay.querySelector(
         ".dcmv-settings-corner-counter"
@@ -508,6 +517,7 @@
           ? false
           : !!settings.autoSplitLongImages,
       longImageSplitActive: false,
+      longImageSplitDepth: 0,
       isLongImageSplitRunning: false,
       hasScheduledAutoLongImageSplit: false,
       showImageComments:
@@ -686,6 +696,7 @@
     }
     clearTimeout(prevState.hudHideTimer);
     clearTimeout(prevState.cursorHideTimer);
+    clearTimeout(prevState.settingsUpdateNoticeHideTimer);
     runtimeModules.hud?.clearEdgeToasts?.(prevState);
     clearRepairTimers(prevState);
     markSettingsUpdateNoticeSeen();
@@ -897,7 +908,53 @@
     }
 
     state.settingsUpdateNoticeSeenKey = noticeKey;
+    state.settingsUpdateNoticeDismissAt = Date.now() + UPDATE_NOTICE_MIN_VISIBLE_MS;
     notice.classList.remove("dcmv-settings-update-notice-hidden");
+  }
+
+  async function prepareLongImageSplitHint() {
+    const targetState = state;
+    if (!targetState || targetState.hasPreparedLongImageSplitHint) return;
+    targetState.hasPreparedLongImageSplitHint = true;
+
+    if (
+      !targetState.isDcinsideSite ||
+      targetState.autoSplitLongImages ||
+      targetState.longImageSplitActive
+    ) {
+      return;
+    }
+
+    const shouldShowForOpeningPages = getPhysicalSourceItems(targetState)
+      .slice(0, 2)
+      .some((item) =>
+        runtimeModules.dcinsideLongImageSplit?.shouldSplitLongImage?.(item, {
+          isPlaceholderSize: isDcPlaceholderSize
+        })
+      );
+    if (!shouldShowForOpeningPages) return;
+
+    const notice = targetState.settingsUpdateNotice;
+    if (
+      !notice ||
+      !notice.classList.contains("dcmv-settings-update-notice-hidden")
+    ) {
+      return;
+    }
+
+    const storageKey = STORAGE_KEYS.longImageSplitHintPending;
+    const isHintPending = await getStorageValue(storageKey);
+    if (state !== targetState || isHintPending !== true) return;
+
+    // 이 안내는 업데이트 공지와 달리 표시되는 순간 사용자가 본 것으로 기록한다.
+    // 뷰어를 바로 닫아도 다음 실행에서 다시 나타나지 않게 하기 위함이다.
+    targetState.settingsUpdateNoticeSeenKey = "";
+    targetState.settingsUpdateNoticeDismissAt =
+      Date.now() + UPDATE_NOTICE_MIN_VISIBLE_MS;
+    notice.textContent = LONG_IMAGE_SPLIT_HINT_MESSAGE;
+    notice.classList.remove("dcmv-settings-update-notice-hidden");
+    syncHudVisibility();
+    setStorageValue(storageKey, false);
   }
 
   function markSettingsUpdateNoticeSeen() {
@@ -905,6 +962,9 @@
     const noticeKey = state?.settingsUpdateNoticeSeenKey;
     if (!notice || !noticeKey) return Promise.resolve();
     if (notice.classList.contains("dcmv-settings-update-notice-hidden")) {
+      return Promise.resolve();
+    }
+    if (Date.now() < (state.settingsUpdateNoticeDismissAt || Infinity)) {
       return Promise.resolve();
     }
 
@@ -984,6 +1044,11 @@
   function syncToggleVisuals() {
     runtimeModules.settings?.syncToggleVisuals?.(state, {
       toggleActiveClass: TOGGLE_ACTIVE_CLASS,
+      getNextLongImageSplitPartCount: (targetState) =>
+        runtimeModules.dcinsideLongImageSplit?.getNextSplitPartCount?.(
+          targetState,
+          { isPlaceholderSize: isDcPlaceholderSize }
+        ) || 0,
       syncManualResetClearVisibility,
       syncNavButtonLabels
     });
@@ -1237,10 +1302,10 @@
       [];
   }
 
-  function createViewerSourceItems(physicalItems, splitEnabled) {
+  function createViewerSourceItems(physicalItems, splitDepth) {
     return runtimeModules.dcinsideLongImageSplit?.createViewerSourceItems?.(
       physicalItems,
-      splitEnabled,
+      splitDepth,
       { isPlaceholderSize: isDcPlaceholderSize }
     ) || { items: physicalItems, splitCount: 0 };
   }
@@ -1586,6 +1651,7 @@
       showHudTemporarily,
       showEdgeToast
     });
+    await prepareLongImageSplitHint();
     scheduleAutoLongImageSplitAfterInitialPaint();
   }
 
@@ -2046,7 +2112,7 @@
     state.physicalSourceItems = nextSourceItems;
     const displayResult = createViewerSourceItems(
       nextSourceItems,
-      state.longImageSplitActive
+      state.longImageSplitDepth
     );
     runtimeModules.pageLoading?.applyRefreshedSourceItems?.(
       state,

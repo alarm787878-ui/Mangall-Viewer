@@ -140,6 +140,22 @@
       const hideUpdateNotice = () => {
         const state = deps.getState();
         if (!state?.settingsUpdateNotice) return;
+        if (state.settingsUpdateNotice.classList.contains("dcmv-settings-update-notice-hidden")) return;
+
+        const remainingMs = (state.settingsUpdateNoticeDismissAt || Date.now()) - Date.now();
+        if (remainingMs > 0) {
+          // 3초 전에 마우스가 닿았다면 남은 시간이 지난 뒤에만 알림을 닫는다.
+          if (!state.settingsUpdateNoticeHideTimer) {
+            state.settingsUpdateNoticeHideTimer = setTimeout(() => {
+              state.settingsUpdateNoticeHideTimer = null;
+              if (deps.getState() === state) hideUpdateNotice();
+            }, Math.ceil(remainingMs));
+          }
+          return;
+        }
+
+        clearTimeout(state.settingsUpdateNoticeHideTimer);
+        state.settingsUpdateNoticeHideTimer = null;
         deps.markSettingsUpdateNoticeSeen?.();
         state.settingsUpdateNotice.classList.add("dcmv-settings-update-notice-hidden");
         deps.syncHudVisibility?.();
@@ -393,7 +409,10 @@
           chrome.runtime?.sendMessage?.({ type: "DCMV_OPEN_OPTIONS" });
         } else if (action === "split-long-images") {
           actionEl.blur();
-          deps.setLongImageSplitActive?.(!state.longImageSplitActive).catch(() => {});
+          deps.setLongImageSplitActive?.(true, { advance: true }).catch(() => {});
+        } else if (action === "clear-long-image-split") {
+          actionEl.blur();
+          deps.setLongImageSplitActive?.(false).catch(() => {});
         } else if (action === "reset-pairing-from-current") {
           resetPairingFromCurrent(actionEl);
         } else if (action === "reset-pairing-from-current-clear") {

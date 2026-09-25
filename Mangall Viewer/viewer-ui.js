@@ -244,13 +244,26 @@
       );
 
       const manualResetDivider = el("div", "dcmv-settings-divider dcmv-settings-divider-manual");
+      const longImageSplitWrap = el(
+        "div",
+        "dcmv-settings-item dcmv-settings-item-split dcmv-settings-long-image-split-wrap"
+      );
       const longImageSplitButton = button(
-        "dcmv-settings-item dcmv-settings-long-image-split",
+        "dcmv-settings-item-main dcmv-settings-long-image-split",
         "split-long-images"
       );
       longImageSplitButton.appendChild(
         el("span", "dcmv-settings-item-label", "긴 이미지 자르기")
       );
+      const longImageSplitClearButton = button(
+        "dcmv-settings-item-subaction dcmv-settings-long-image-split-clear",
+        "clear-long-image-split"
+      );
+      longImageSplitClearButton.setAttribute("aria-label", "긴 이미지 자르기 해제");
+      longImageSplitClearButton.title = "긴 이미지 자르기 해제";
+      longImageSplitClearButton.hidden = true;
+      longImageSplitClearButton.appendChild(manualResetClearIcon());
+      longImageSplitWrap.append(longImageSplitButton, longImageSplitClearButton);
       const manualPairingResetButton = el(
         "div",
         "dcmv-settings-item dcmv-settings-item-split dcmv-settings-manual-reset-wrap"
@@ -294,7 +307,7 @@
         imageCommentsButton,
         advancedToggleButton,
         manualResetDivider,
-        longImageSplitButton,
+        longImageSplitWrap,
         manualPairingResetButton
       );
 

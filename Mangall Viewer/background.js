@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS = {
   resetPairingShortcut: "r"
 };
 const INITIAL_HUD_GUIDE_STORAGE_KEY = "shouldShowInitialHudGuide";
+const LONG_IMAGE_SPLIT_HINT_PENDING_STORAGE_KEY = "longImageSplitHintPending";
 
 async function syncSiteRegistry() {
   const universalSettings = globalThis.__dcmvModules?.universalSiteSettings;
@@ -164,7 +165,10 @@ function ensureDefaultSettings() {
 chrome.runtime.onInstalled.addListener(async (details) => {
   ensureDefaultSettings();
   if (details?.reason === "install") {
-    chrome.storage?.local?.set({ [INITIAL_HUD_GUIDE_STORAGE_KEY]: true });
+    chrome.storage?.local?.set({
+      [INITIAL_HUD_GUIDE_STORAGE_KEY]: true,
+      [LONG_IMAGE_SPLIT_HINT_PENDING_STORAGE_KEY]: true
+    });
   }
   await syncSiteRegistry();
   createContextMenu();

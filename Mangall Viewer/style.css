@@ -107,7 +107,7 @@
   height: 100vh;
 }
 
-/* 원본 파일을 새로 만들지 않고 같은 이미지를 위·아래 절반으로 보여준다. */
+/* 원본 파일 하나를 같은 비율의 여러 페이지로 나눠 보여준다. */
 .dcmv-image-render-box.dcmv-image-render-box-split {
   overflow: hidden;
 }
@@ -117,18 +117,11 @@
   position: absolute;
   left: 0;
   width: 100% !important;
-  height: 200% !important;
+  height: var(--dcmv-split-image-height) !important;
   max-width: 100% !important;
   max-height: none !important;
   object-fit: fill !important;
-}
-
-.dcmv-image-render-box-split-top > .dcmv-image {
-  top: 0;
-}
-
-.dcmv-image-render-box-split-bottom > .dcmv-image {
-  top: -100%;
+  top: var(--dcmv-split-image-top);
 }
 
 .dcmv-hud-trigger {
@@ -524,6 +517,10 @@
   overflow: hidden;
 }
 
+.dcmv-settings-long-image-split-wrap[hidden] {
+  display: none;
+}
+
 .dcmv-settings-item-main,
 .dcmv-settings-item-subaction {
   border: 0;
@@ -552,8 +549,8 @@
   transition: background 0.15s ease;
 }
 
-.dcmv-settings-item-main:hover,
-.dcmv-settings-item-subaction:hover {
+.dcmv-settings-item-main:not(:disabled):hover,
+.dcmv-settings-item-subaction:not(:disabled):hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -565,6 +562,12 @@
 
 .dcmv-settings-item-subaction[hidden] {
   display: none;
+}
+
+.dcmv-settings-item-main:disabled,
+.dcmv-settings-item-subaction:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .dcmv-settings-subaction-icon {
