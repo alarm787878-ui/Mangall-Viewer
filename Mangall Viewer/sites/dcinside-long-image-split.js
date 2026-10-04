@@ -189,6 +189,30 @@
     return { items, splitCount, advancedCount };
   }
 
+  // 조각도 원본 긴 이미지 주소를 쓰므로, 공통 메타데이터 확인을 거치면
+  // 조각 크기가 원본 전체 크기로 덮어써진다. 그러면 양면 묶기가 조각을
+  // 세로로 긴 페이지로 보고 단면으로 빼므로, 확인 직후 조각 크기로 되돌린다.
+  function restoreSplitPartSizes(items) {
+    for (const item of items || []) {
+      const partCount = item?.longImageSplitCount;
+      if (!partCount || !item.width || !item.height) continue;
+
+      const expectedHeight = Math.max(1, item.longImageOriginalHeight / partCount);
+      if (
+        item.width === item.longImageOriginalWidth &&
+        item.height === expectedHeight
+      ) {
+        continue;
+      }
+
+      // 조각 크기와 다르면 방금 잰 전체 이미지 크기다(고화질 원본일 수도 있다).
+      item.longImageOriginalWidth = item.width;
+      item.longImageOriginalHeight = item.height;
+      item.height = Math.max(1, item.height / partCount);
+      item.longImageSplitAspectRatio = item.width / item.height;
+    }
+  }
+
   function findViewerIndexForSource(items, sourceIndex, preferredPart = "") {
     if (!Array.isArray(items) || !items.length) return 0;
 
@@ -325,9 +349,7 @@
           shouldSplitLongImage(item, deps)
         )
       ) {
-        if (options.closeMenu !== false) {
-          deps.toggleSettingsMenu?.(false);
-        }
+        // 자르기가 실행되지 않으면 설정 메뉴와 HUD를 그대로 유지한다.
         if (options.notify !== false && options.notifyIfNoSplit !== false) {
           deps.showEdgeToast?.("자를 긴 이미지를 찾지 못했습니다.", 2000);
         }
@@ -342,7 +364,6 @@
         nextDepth = Math.max(1, currentDepth);
       } else if (enabled && options.advance === true) {
         if (currentDepth >= MAX_SPLIT_DEPTH || !getNextSplitPartCount(targetState, deps)) {
-          if (options.closeMenu !== false) deps.toggleSettingsMenu?.(false);
           if (options.notify !== false) {
             deps.showEdgeToast?.("더 자를 긴 이미지를 찾지 못했습니다.", 2000);
           }
@@ -406,6 +427,7 @@
     shouldSplitLongImage,
     getNextSplitPartCount,
     createViewerSourceItems,
+    restoreSplitPartSizes,
     findViewerIndexForSource,
     getRenderAspectRatioOverride,
     decorateRenderBox,

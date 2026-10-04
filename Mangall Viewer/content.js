@@ -1942,25 +1942,29 @@
   }
 
   async function hydrateImageMetadata(items, options = {}) {
-    return runtimeModules.pageLoading?.hydrateImageMetadata
-      ? runtimeModules.pageLoading.hydrateImageMetadata(items, options, {
-          imageMetadataBatchSize: IMAGE_METADATA_BATCH_SIZE,
-          loadImageMetadata,
-          isLandscapeLike,
-          convertPopUrlToDirectImageUrl,
-          imageMetadataTimeoutMs: IMAGE_METADATA_TIMEOUT_MS
-        })
-      : { orientationChangedPages: [] };
+    if (!runtimeModules.pageLoading?.hydrateImageMetadata) {
+      return { orientationChangedPages: [] };
+    }
+    const result = await runtimeModules.pageLoading.hydrateImageMetadata(items, options, {
+      imageMetadataBatchSize: IMAGE_METADATA_BATCH_SIZE,
+      loadImageMetadata,
+      isLandscapeLike,
+      convertPopUrlToDirectImageUrl,
+      imageMetadataTimeoutMs: IMAGE_METADATA_TIMEOUT_MS
+    });
+    runtimeModules.dcinsideLongImageSplit?.restoreSplitPartSizes?.(items);
+    return result;
   }
 
-  function loadImageMetadata(item, options = {}) {
-    return runtimeModules.pageLoading?.loadImageMetadata
-      ? runtimeModules.pageLoading.loadImageMetadata(item, options, {
-          isLandscapeLike,
-          convertPopUrlToDirectImageUrl,
-          imageMetadataTimeoutMs: IMAGE_METADATA_TIMEOUT_MS
-        })
-      : Promise.resolve();
+  async function loadImageMetadata(item, options = {}) {
+    if (!runtimeModules.pageLoading?.loadImageMetadata) return undefined;
+    const result = await runtimeModules.pageLoading.loadImageMetadata(item, options, {
+      isLandscapeLike,
+      convertPopUrlToDirectImageUrl,
+      imageMetadataTimeoutMs: IMAGE_METADATA_TIMEOUT_MS
+    });
+    runtimeModules.dcinsideLongImageSplit?.restoreSplitPartSizes?.([item]);
+    return result;
   }
 
   function findElementForSourceItem(root, targetItem) {
