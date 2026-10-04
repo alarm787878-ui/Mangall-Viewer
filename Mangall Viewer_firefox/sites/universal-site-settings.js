@@ -119,7 +119,14 @@
 
   modules.universalSiteSettings = {
     getStorageArea() {
-      return globalThis.__dcmvBrowserApi?.getStorageArea?.() || null;
+      if (
+        typeof chrome === "undefined" ||
+        !chrome.storage ||
+        !chrome.storage.local
+      ) {
+        return null;
+      }
+      return chrome.storage.local;
     },
 
     loadCustomSites() {
@@ -465,8 +472,8 @@
         const parsed = new URL(normalizedUrl, location.href);
         const originalUrl = parsed.searchParams.get("fname");
         if (originalUrl && /^https?:\/\//i.test(originalUrl)) {
-          // 직접 주소와 fname 프록시 주소를 같은 한 장으로 비교합니다.
-          // 실제 이미지 로딩에는 프록시 주소가 필요하므로 반환값을 로딩에 사용하면 안 됩니다.
+          // 직접 주소와 fname 프록시 주소를 같은 한 장으로 비교한다.
+          // 실제 이미지 로딩에는 normalizedUrl을 그대로 사용해야 프록시가 깨지지 않는다.
           return this.normalizeImageUrl(originalUrl);
         }
       } catch {
@@ -524,12 +531,12 @@
       }
 
       // 아직 화면에 배치되지 않은 이미지는 원본 크기를 보조 기준으로 사용해
-      // 10×10 아이콘 같은 명백한 UI 이미지가 크기 미상으로 통과하지 않게 합니다.
+      // 10×10 아이콘 같은 명백한 UI 이미지가 크기 미상으로 통과하지 않게 한다.
       return this.getKnownImageSize(imgEl);
     },
 
     hasLargeImageSize(imgEl) {
-      // 본문 포함 여부는 원본 해상도가 아니라 페이지에 실제 표시되는 크기로 판단합니다.
+      // 본문 포함 여부는 원본 해상도가 아니라 페이지에 실제 표시되는 크기로 판단한다.
       const { width, height } = this.getContentFilterImageSize(imgEl);
       if (!width || !height) return false;
 
@@ -870,7 +877,6 @@
       }
 
       if (next.sourceType === "observed") {
-        const overlap = this.getSourceItemOverlapRatio(previous.items, next.items);
         const prevDominantRatio = previous.scoreInfo?.folderStats?.dominantRatio || 0;
         const nextDominantRatio = next.scoreInfo?.folderStats?.dominantRatio || 0;
         if (overlap >= 0.8 && nextCount > prevCount && nextDominantRatio < prevDominantRatio) {
@@ -1435,7 +1441,7 @@
         const identityKey = universalSiteSettings.getImageIdentityKey(sourceUrl);
         if (!sourceUrl || !identityKey) return;
 
-        // DOM에서 이미지가 사라져도 실제로 로드됐던 주소를 사용해야 로딩이 끊기지 않습니다.
+        // DOM에서 사라진 이미지를 복원할 때도 실제로 로드됐던 주소를 사용한다.
         rememberedDomImageSourceByKey.set(identityKey, sourceUrl);
         if (rememberedDomImageUrlSet.has(identityKey)) return;
 

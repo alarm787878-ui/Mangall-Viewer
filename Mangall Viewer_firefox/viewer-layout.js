@@ -1,86 +1,104 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
-  const VIEWER_IMAGE_READY_TIMEOUT_MS = 1000;
-  function preloadImageItem(item) {
-    if (!item || item.failed) return;
+  const dcinsideComments = globalThis.__dcmvDcinsideComments || null;
+  const dcinsideLongImageSplit = modules.dcinsideLongImageSplit || null;
+  const MAX_VIEWER_UPSCALE = 1.75;
+  const PAGE_SWAP_TIMEOUT_MS = 1000;
 
-    const src = item.resolvedSrc || item.src || "";
-    if (src) {
-      const img = new Image();
-      img.src = src;
+  function sizeViewerRenderBox(renderBox, item, displayType = "single") {
+    if (!(renderBox instanceof HTMLElement)) {
+      return;
+    }
+
+    const imageElement = renderBox.querySelector(":scope > .dcmv-image");
+    if (!(imageElement instanceof HTMLImageElement)) {
+      return;
+    }
+
+    const splitAspectRatio =
+      dcinsideLongImageSplit?.getRenderAspectRatioOverride?.(renderBox, item) || 0;
+    const width = imageElement.naturalWidth || item?.width || 0;
+    const height = splitAspectRatio > 0
+      ? width / splitAspectRatio
+      : imageElement.naturalHeight || item?.height || 0;
+
+    if (!width || !height) {
+      renderBox.style.removeProperty("width");
+      renderBox.style.removeProperty("height");
+      return;
+    }
+
+    const availableWidth =
+      displayType === "pair"
+        ? Math.max(0, Math.floor(window.innerWidth / 2) - 4)
+        : Math.max(0, window.innerWidth - 4);
+    const availableHeight = Math.max(0, window.innerHeight - 4);
+    if (!availableWidth || !availableHeight) {
+      return;
+    }
+
+    const scale = Math.min(
+      MAX_VIEWER_UPSCALE,
+      availableWidth / width,
+      availableHeight / height
+    );
+    if (!Number.isFinite(scale) || scale <= 0) {
+      return;
+    }
+
+    renderBox.style.width = `${Math.max(0.1, width * scale)}px`;
+    renderBox.style.height = `${Math.max(0.1, height * scale)}px`;
+  }
+
+  // Firefox는 load가 끝나도 화면에 그릴 때 디코딩하는 경우가 많다.
+  // 다음 페이지를 미리 디코딩해 두고, 그 사이 Image 객체가 버려지지 않도록 붙잡아 둔다.
+  const preloadedImages = new Map();
+
+  function decodeImageElement(img) {
+    if (!(img instanceof HTMLImageElement) || typeof img.decode !== "function") {
+      return Promise.resolve();
+    }
+    try {
+      return img.decode().catch(() => {});
+    } catch {
+      return Promise.resolve();
     }
   }
 
-  function waitForViewerImageReady(imageElement, item) {
-    if (!(imageElement instanceof HTMLImageElement)) {
-      return Promise.resolve();
+  function preloadImageItem(item) {
+    if (!item || item.failed) return null;
+
+    const src = item.resolvedSrc || item.src || "";
+    if (!src) return null;
+
+    let img = preloadedImages.get(src);
+    if (!img) {
+      img = new Image();
+      img.src = src;
+      decodeImageElement(img);
+      preloadedImages.set(src, img);
     }
+    return src;
+  }
 
-    const primarySrc = item?.resolvedSrc || item?.src || "";
-    const fallbackSrc =
-      item?.resolvedSrc && item?.src && item.resolvedSrc !== item.src
-        ? item.src
-        : "";
+  function isPendingViewerWrap(pageWrap) {
+    if (!(pageWrap instanceof HTMLElement)) return false;
 
-    if (!primarySrc) {
-      return Promise.resolve();
+    return (
+      pageWrap.dataset.dcmvPending === "1" ||
+      pageWrap.style.visibility === "hidden"
+    );
+  }
+
+  function cleanupStalePendingPageWraps(stage) {
+    if (!(stage instanceof HTMLElement)) return;
+
+    const pageWraps = stage.querySelectorAll(":scope > .dcmv-page-wrap");
+    for (const pageWrap of pageWraps) {
+      if (!isPendingViewerWrap(pageWrap)) continue;
+
+      pageWrap.remove();
     }
-
-    return new Promise((resolve) => {
-      let didTryFallback = false;
-      let didResolve = false;
-      let timeoutId = null;
-
-      const cleanup = () => {
-        imageElement.removeEventListener("load", handleLoad);
-        imageElement.removeEventListener("error", handleError);
-        clearTimeout(timeoutId);
-      };
-
-      const finish = () => {
-        if (didResolve) return;
-        didResolve = true;
-        cleanup();
-        resolve();
-      };
-
-      const resolveAfterDecode = () => {
-        if (typeof imageElement.decode !== "function") {
-          finish();
-          return;
-        }
-
-        // Firefox에서는 load 직후 바로 교체하면 디코딩 타이밍 때문에 순간 깜빡일 수 있다.
-        try {
-          imageElement.decode().then(finish, finish);
-        } catch {
-          finish();
-        }
-      };
-
-      const handleLoad = () => {
-        resolveAfterDecode();
-      };
-
-      const handleError = () => {
-        if (!didTryFallback && fallbackSrc) {
-          didTryFallback = true;
-          imageElement.src = fallbackSrc;
-          return;
-        }
-
-        finish();
-      };
-
-      imageElement.addEventListener("load", handleLoad);
-      imageElement.addEventListener("error", handleError);
-      timeoutId = setTimeout(finish, VIEWER_IMAGE_READY_TIMEOUT_MS);
-      imageElement.src = primarySrc;
-
-      if (imageElement.complete && imageElement.naturalWidth) {
-        handleLoad();
-      }
-    });
   }
 
   function cleanupEmptyPlaceholders(stage) {
@@ -372,6 +390,8 @@
     renderCurrentStep(targetState, deps) {
       if (!targetState) return;
 
+      dcinsideComments?.restoreMovedCommentRoots?.();
+
       const step = recoverRenderableCurrentStep(targetState, deps);
 
       if (!step || !step.images.length) {
@@ -395,11 +415,18 @@
 
       targetState.renderSeq = (targetState.renderSeq || 0) + 1;
       const renderSeq = targetState.renderSeq;
+      cleanupStalePendingPageWraps(targetState.stage);
+      const oldWraps = Array.from(
+        targetState.stage.querySelectorAll(":scope > .dcmv-page-wrap")
+      );
 
       const wrap = document.createElement("div");
       wrap.className = `dcmv-page-wrap ${
         step.displayType === "pair" ? "dcmv-page-pair" : "dcmv-page-single"
       }`;
+      wrap.dataset.dcmvRenderSeq = String(renderSeq);
+      wrap.dataset.dcmvStepIndex = String(targetState.stepIndex);
+      wrap.dataset.dcmvPending = "1";
 
       if (step.displayType === "single" && step.images[0].width > step.images[0].height) {
         wrap.classList.add("dcmv-page-single-landscape");
@@ -410,10 +437,92 @@
         renderImages = [step.images[1], step.images[0]];
       }
 
-      const imageReadyPromises = [];
+      let layoutRefreshCoalesced = false;
+      const scheduleStepLayoutRefresh = () => {
+        if (layoutRefreshCoalesced) return;
+        layoutRefreshCoalesced = true;
+        queueMicrotask(() => {
+          layoutRefreshCoalesced = false;
+          deps.refreshViewerStepLayout?.();
+        });
+      };
+
+      let imagesToLoad = 0;
+      let imagesLoaded = 0;
+      let hasShownPreparedWrap = false;
+      const isLatestRender = () =>
+        targetState.renderSeq === renderSeq && wrap.isConnected;
+
+      const removeOtherPageWraps = () => {
+        const wraps = targetState.stage.querySelectorAll(":scope > .dcmv-page-wrap");
+        for (const pageWrap of wraps) {
+          if (pageWrap !== wrap) {
+            pageWrap.remove();
+          }
+        }
+      };
+
+      const showPreparedWrap = () => {
+        if (hasShownPreparedWrap) {
+          return;
+        }
+
+        if (!isLatestRender()) {
+          return;
+        }
+
+        hasShownPreparedWrap = true;
+        clearTimeout(pageSwapTimer);
+        wrap.style.removeProperty("position");
+        wrap.style.removeProperty("inset");
+        wrap.style.removeProperty("z-index");
+
+        // 이전 페이지를 먼저 지운 뒤에 크기와 댓글 위치를 잰다.
+        // stage가 가로 flex라서 이전 페이지가 남아 있으면 새 페이지가 화면 오른쪽 밖에
+        // 놓인 상태로 측정되고, 댓글이 아래/옆으로 잘못 배치된다.
+        // 같은 작업 안에서 끝나므로 이 사이에 화면이 그려지지 않아 깜빡임은 없다.
+        removeOtherPageWraps();
+        cleanupEmptyPlaceholders(targetState.stage);
+
+        if (typeof deps.refreshViewerStepLayout === "function") {
+          deps.refreshViewerStepLayout();
+        }
+
+        wrap.style.visibility = "visible";
+        delete wrap.dataset.dcmvPending;
+        // 페이지 번호는 새 이미지가 실제로 화면에 바뀌는 순간에 같이 바꾼다.
+        // 로딩이 느릴 때 번호만 먼저 넘어가고 이전 페이지가 보이는 일을 막기 위함이다.
+        deps.renderPageCounter(step);
+        deps.onStepPresented?.();
+        queueMicrotask(() => {
+          deps.flushDeferredRepairRender?.();
+        });
+      };
+
+      const pageSwapTimer = setTimeout(() => {
+        // 새 이미지가 오래 대기 중이면 이전 페이지가 그대로 보이지 않도록 먼저 교체한다.
+        showPreparedWrap();
+      }, PAGE_SWAP_TIMEOUT_MS);
+
+      const swapContent = () => {
+        if (!isLatestRender()) {
+          return;
+        }
+        imagesLoaded += 1;
+        if (imagesLoaded >= imagesToLoad) {
+          showPreparedWrap();
+        }
+      };
 
       for (let renderIndex = 0; renderIndex < renderImages.length; renderIndex += 1) {
         const item = renderImages[renderIndex];
+        const pagePosition =
+          step.displayType === "pair"
+            ? renderIndex === 0
+              ? "left"
+              : "right"
+            : "single";
+
         if (item.failed) {
           const failedBox = document.createElement("div");
           failedBox.className = "dcmv-image dcmv-image-failed";
@@ -430,11 +539,13 @@
           continue;
         }
 
+        imagesToLoad += 1;
+
         const img = document.createElement("img");
         img.className = "dcmv-image";
+        img.src = item.resolvedSrc || item.src || "";
         img.alt = item.alt || "";
         img.draggable = false;
-        imageReadyPromises.push(waitForViewerImageReady(img, item));
 
         const runInitialAutoAfterFirstViewerImageLoad = () => {
           const state = deps.getState();
@@ -445,20 +556,39 @@
           });
         };
 
+        const hasFallbackSrc = !!(
+          item.resolvedSrc && item.src && item.resolvedSrc !== item.src
+        );
+        let didCountImage = false;
+        let didTryFallbackSrc = false;
+        const countImageReady = () => {
+          if (didCountImage) return;
+          didCountImage = true;
+          swapContent();
+        };
+
+        // Firefox는 load 직후에도 디코딩이 덜 끝나 있을 수 있다.
+        // 이전 페이지를 지우기 전에 decode()까지 기다려야 검은 프레임이 생기지 않는다.
+        const handleImageLoaded = () => {
+          runInitialAutoAfterFirstViewerImageLoad();
+          deps.syncImageLoadingBarPosition();
+          scheduleStepLayoutRefresh();
+          decodeImageElement(img).then(countImageReady);
+        };
+
         if (img.complete && img.naturalWidth) {
-          queueMicrotask(() => {
-            runInitialAutoAfterFirstViewerImageLoad();
-            deps.syncImageLoadingBarPosition();
-          });
+          queueMicrotask(handleImageLoaded);
         } else {
-          img.addEventListener(
-            "load",
-            () => {
-              runInitialAutoAfterFirstViewerImageLoad();
-              deps.syncImageLoadingBarPosition();
-            },
-            { once: true }
-          );
+          img.addEventListener("load", handleImageLoaded);
+          img.addEventListener("error", () => {
+            // 고화질 주소가 실패하면 원본 주소를 다시 시도하고, 그 결과를 기다린다.
+            if (hasFallbackSrc && !didTryFallbackSrc) {
+              didTryFallbackSrc = true;
+              img.src = item.src;
+              return;
+            }
+            countImageReady();
+          });
         }
 
         img.addEventListener("error", () => {
@@ -466,15 +596,35 @@
           deps.syncImageLoadingBarPosition();
         });
 
-        wrap.appendChild(img);
+        wrap.appendChild(
+          wrapViewerImageWithComments({
+            imageElement: img,
+            item,
+            pagePosition,
+            targetState,
+            displayType: step.displayType
+          })
+        );
       }
 
-      Promise.all(imageReadyPromises).then(() => {
-        if (!targetState.stage || targetState.renderSeq !== renderSeq) return;
-        targetState.stage.replaceChildren(wrap);
-        deps.syncImageLoadingBarPosition();
-      });
-      deps.renderPageCounter(step);
+      // visibility:hidden 상태일 때 flex 레이아웃으로 인해 oldWrap이 찌그러지는 현상 방지
+      // Stage가 Flex 컨테이너이므로, 새 wrap을 append하기 전에 absolute로 만들어 흐름에서 제외함
+        if (oldWraps.length) {
+          wrap.style.position = "absolute";
+          wrap.style.inset = "0";
+          wrap.style.zIndex = "10"; // 이전 페이지 위에 확실히 오버레이
+      }
+
+      // 초기에는 보이지 않게 설정 (위치/크기 확정 후 표시)
+      wrap.style.visibility = "hidden";
+
+      // 새 콘텐츠를 stage에 추가 (이전 콘텐츠 위에 오버레이 혹은 stage의 첫 자식으로 추가)
+      targetState.stage.appendChild(wrap);
+      // 이미지가 이미 모두 준비되어 있거나 로딩할 이미지가 없는 경우 즉시 교체
+      if (imagesToLoad === 0 || imagesLoaded >= imagesToLoad) {
+        showPreparedWrap();
+      }
+
       deps.syncManualResetClearVisibility();
       deps.syncImageLoadingBarPosition();
       deps.preloadNearbySteps();
@@ -495,17 +645,29 @@
       deps.renderPagePicker();
     },
 
+    // 뷰어를 닫으면 미리 디코딩해 둔 주변 페이지 이미지를 놓아준다.
+    clearPreloadedImages() {
+      preloadedImages.clear();
+    },
+
     preloadNearbySteps(targetState) {
       if (!targetState || !targetState.currentStep) return;
 
       const targets = [targetState.stepIndex + 1, targetState.stepIndex + 2, targetState.stepIndex - 1]
         .filter((i) => i >= 0 && i < targetState.steps.length);
 
+      const keepSrcs = new Set();
       for (const idx of targets) {
         for (const item of targetState.steps[idx].images) {
           if (item.failed) continue;
-          preloadImageItem(item);
+          const src = preloadImageItem(item);
+          if (src) keepSrcs.add(src);
         }
+      }
+
+      // 주변 페이지만 붙잡아 두어 디코딩된 이미지가 메모리에 계속 쌓이지 않게 한다.
+      for (const src of preloadedImages.keys()) {
+        if (!keepSrcs.has(src)) preloadedImages.delete(src);
       }
     },
 
@@ -569,6 +731,82 @@
 
       targetState.stepIndex = idx;
       targetState.currentStep = targetState.steps[idx] || null;
+    },
+
+    refreshCurrentStepRenderBoxes(targetState) {
+      if (!targetState?.stage || !targetState?.currentStep?.images?.length) return;
+
+      const renderBoxes = targetState.stage.querySelectorAll(".dcmv-image-render-box");
+      for (const renderBox of renderBoxes) {
+        if (!(renderBox instanceof HTMLElement)) continue;
+        const itemIndex = Number(renderBox.dataset.dcmvImageIndex);
+        if (!Number.isInteger(itemIndex)) continue;
+        const item = targetState.currentStep.images.find((entry) => entry.index === itemIndex);
+        if (!item) continue;
+        sizeViewerRenderBox(renderBox, item, renderBox.dataset.dcmvDisplayType || targetState.currentStep.displayType || "single");
+      }
     }
   };
+
+  function buildViewerRenderBox(imageElement, item, displayType = "single") {
+    if (!(imageElement instanceof HTMLElement)) {
+      return imageElement;
+    }
+
+    const renderBox = document.createElement("div");
+    renderBox.className = "dcmv-image-render-box";
+    renderBox.dataset.dcmvImageIndex = `${item?.index ?? ""}`;
+    renderBox.dataset.dcmvDisplayType = displayType;
+    dcinsideLongImageSplit?.decorateRenderBox?.(renderBox, item);
+    renderBox.appendChild(imageElement);
+
+    // item.width/height 메타데이터로 즉시 사전 크기 계산 → opacity 관리 불필요
+    sizeViewerRenderBox(renderBox, item, displayType);
+    return renderBox;
+  }
+
+  function wrapViewerImageWithComments(options = {}) {
+    const { imageElement, item, pagePosition, targetState, displayType = "single" } = options;
+
+    if (!(imageElement instanceof HTMLElement)) {
+      return imageElement;
+    }
+
+    const renderBox = buildViewerRenderBox(imageElement, item, displayType);
+
+    // 위쪽 절반은 댓글 UI를 만들지 않는다. 원본 페이지의 아이콘을 지우거나
+    // 숨기지 않고, 아래쪽 절반에만 기존 댓글 래퍼를 연결한다.
+    if (dcinsideLongImageSplit?.shouldAttachImageComments?.(item) === false) {
+      return renderBox;
+    }
+
+    if (!targetState?.isDcinsideSite || !targetState?.showImageComments || !dcinsideComments) {
+      return renderBox;
+    }
+
+    const isCollapsed =
+      dcinsideComments.isCommentCollapsedForSource?.(item?.element) || false;
+    const comments = isCollapsed
+      ? []
+      : dcinsideComments.collectImageCommentsForSourceItem?.(item?.element);
+    const originalCommentRoot = dcinsideComments.findOriginalCommentRoot?.(item?.element) || null;
+    const emptyCommentButton =
+      dcinsideComments.findEmptyCommentOpenButton?.(item?.element) || null;
+    const commentKey = dcinsideComments.getCommentSourceKey?.(item?.element) || "";
+    const hasComments = Array.isArray(comments) && comments.length > 0;
+
+    const side = dcinsideComments.getCommentSide?.({ pagePosition }) || "right";
+    return (
+      dcinsideComments.wrapImageWithComments?.({
+        imageElement,
+        sourceElement: item?.element || null,
+        comments: hasComments ? comments : [],
+        side,
+        titleText: `이미지 댓글 ${hasComments ? comments.length : 0}개`,
+        originalCommentRoot,
+        emptyCommentButton,
+        commentKey
+      }) || renderBox
+    );
+  }
 })();

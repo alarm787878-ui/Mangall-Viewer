@@ -3,8 +3,8 @@
   const UPDATE_NOTICE = {
     // 이 버전에서만 업데이트 알림을 한 번 표시한다.
     // 예: version을 "1.5.5"로 바꾸면 1.5.5에서만 이 문구가 뜬다.
-    version: "1.5.5",
-    message: "페이지 숫자 클릭으로 페이지 이동이 안되던 버그를 수정하였습니다."
+    version: "1.6.1",
+    message: "디시에서 세로로 2장 이어 붙인 이미지도 뷰어로 볼 수 있게 업데이트 했습니다. 긴 이미지 자르기 버튼을 눌러주세요. 추가 설정에서 긴 이미지가 있을 때 자동으로 자르도록 설정할 수도 있습니다."
   };
 
   modules.ui = {
@@ -116,14 +116,43 @@
         return wrapper;
       }
 
+      function externalLinkIcon() {
+        const wrapper = el("span", "dcmv-settings-external-icon");
+        wrapper.setAttribute("aria-hidden", "true");
+
+        const svg = document.createElementNS(svgNs, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none");
+        svg.setAttribute("stroke", "currentColor");
+        svg.setAttribute("stroke-width", "2");
+        svg.setAttribute("stroke-linecap", "round");
+        svg.setAttribute("stroke-linejoin", "round");
+        svg.setAttribute("focusable", "false");
+        svg.setAttribute("aria-hidden", "true");
+
+        [
+          "M15 3h6v6",
+          "M10 14 21 3",
+          "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+        ].forEach((pathData) => {
+          const path = document.createElementNS(svgNs, "path");
+          path.setAttribute("d", pathData);
+          svg.appendChild(path);
+        });
+
+        wrapper.appendChild(svg);
+        return wrapper;
+      }
+
       const stage = el("div", "dcmv-stage");
       const cornerPageCounter = el("div", "dcmv-corner-page-counter");
       cornerPageCounter.setAttribute("aria-hidden", "true");
       const imageLoadingBar = el("div", "dcmv-image-loading-bar");
       const imageLoadingBarFill = el("div", "dcmv-image-loading-bar-fill");
       imageLoadingBar.appendChild(imageLoadingBarFill);
-      const edgeToast = el("div", "dcmv-edge-toast");
-      edgeToast.setAttribute("aria-live", "polite");
+      const edgeToastStack = el("div", "dcmv-edge-toast-stack");
+      edgeToastStack.setAttribute("aria-live", "polite");
+      edgeToastStack.setAttribute("aria-atomic", "false");
       const hudTrigger = el("div", "dcmv-hud-trigger");
       const hud = el("div", "dcmv-hud");
 
@@ -186,7 +215,43 @@
         el("span", "dcmv-settings-item-value dcmv-settings-rtl-value", "좌←우")
       );
 
+      // Firefox판은 자동 전체화면 설정을 표시하지 않는다(content.js 참고).
+
+      const imageCommentsButton = button(
+        "dcmv-settings-item dcmv-settings-image-comments",
+        "toggle-image-comments"
+      );
+      const imageCommentsSwitch = el(
+        "span",
+        "dcmv-settings-switch dcmv-settings-image-comments-switch"
+      );
+      imageCommentsSwitch.setAttribute("aria-hidden", "true");
+      imageCommentsButton.append(
+        el("span", "dcmv-settings-item-label", "이미지 댓글 표시"),
+        imageCommentsSwitch
+      );
+
       const manualResetDivider = el("div", "dcmv-settings-divider dcmv-settings-divider-manual");
+      const longImageSplitWrap = el(
+        "div",
+        "dcmv-settings-item dcmv-settings-item-split dcmv-settings-long-image-split-wrap"
+      );
+      const longImageSplitButton = button(
+        "dcmv-settings-item-main dcmv-settings-long-image-split",
+        "split-long-images"
+      );
+      longImageSplitButton.appendChild(
+        el("span", "dcmv-settings-item-label", "긴 이미지 자르기")
+      );
+      const longImageSplitClearButton = button(
+        "dcmv-settings-item-subaction dcmv-settings-long-image-split-clear",
+        "clear-long-image-split"
+      );
+      longImageSplitClearButton.setAttribute("aria-label", "긴 이미지 자르기 해제");
+      longImageSplitClearButton.title = "긴 이미지 자르기 해제";
+      longImageSplitClearButton.hidden = true;
+      longImageSplitClearButton.appendChild(manualResetClearIcon());
+      longImageSplitWrap.append(longImageSplitButton, longImageSplitClearButton);
       const manualPairingResetButton = el(
         "div",
         "dcmv-settings-item dcmv-settings-item-split dcmv-settings-manual-reset-wrap"
@@ -219,12 +284,17 @@
         "dcmv-settings-item dcmv-settings-advanced-toggle",
         "toggle-advanced-settings"
       );
-      advancedToggleButton.append(el("span", "dcmv-settings-item-label", "추가 설정"));
+      advancedToggleButton.append(
+        el("span", "dcmv-settings-item-label", "추가 설정"),
+        arrowIcon("M4.25 2.25 8 6l-3.75 3.75")
+      );
 
       basicSettings.append(
         rtlButton,
+        imageCommentsButton,
         advancedToggleButton,
         manualResetDivider,
+        longImageSplitWrap,
         manualPairingResetButton
       );
 
@@ -253,6 +323,20 @@
         autoFirstPageSwitch
       );
 
+      const autoLongImageSplitButton = button(
+        "dcmv-settings-item dcmv-settings-auto-long-image-split",
+        "toggle-auto-long-image-split"
+      );
+      const autoLongImageSplitSwitch = el(
+        "span",
+        "dcmv-settings-switch dcmv-settings-auto-long-image-split-switch"
+      );
+      autoLongImageSplitSwitch.setAttribute("aria-hidden", "true");
+      autoLongImageSplitButton.append(
+        el("span", "dcmv-settings-item-label", "자동으로 긴 이미지 자르기"),
+        autoLongImageSplitSwitch
+      );
+
       const cornerCounterButton = button(
         "dcmv-settings-item dcmv-settings-corner-counter",
         "toggle-corner-counter"
@@ -272,7 +356,8 @@
         "open-extension-options"
       );
       openExtensionOptionsButton.append(
-        el("span", "dcmv-settings-item-label", "확장프로그램 옵션")
+        el("span", "dcmv-settings-item-label", "확장프로그램 옵션"),
+        externalLinkIcon()
       );
 
       // Back button at the bottom of advanced panel
@@ -280,11 +365,15 @@
         "dcmv-settings-item dcmv-settings-back-to-basic",
         "toggle-advanced-settings"
       );
-      backToBasicButton.append(el("span", "dcmv-settings-item-label", "기본 설정"));
+      backToBasicButton.append(
+        arrowIcon("M7.75 2.25 4 6l3.75 3.75"),
+        el("span", "dcmv-settings-item-label", "기본 설정")
+      );
 
       advancedSettings.append(
         wasdButton,
         autoFirstPageButton,
+        autoLongImageSplitButton,
         cornerCounterButton,
         openExtensionOptionsButton,
         backToBasicButton
@@ -295,9 +384,7 @@
       settingsSlider.append(basicSettings, advancedSettings);
 
       settingsMenu.append(settingsSlider);
-      // 업데이트 알림 버블은 이번 안내 내용과 관련된 페이지 버튼 옆에 붙인다.
-      pagePickerWrap.appendChild(settingsUpdateNotice);
-      settingsWrap.append(settingsButton, settingsMenu);
+      settingsWrap.append(settingsButton, settingsMenu, settingsUpdateNotice);
 
       const closeButton = button("dcmv-btn", "close", "닫기");
 
@@ -318,7 +405,7 @@
         closeButton,
         nextButton
       );
-      overlay.append(stage, cornerPageCounter, imageLoadingBar, edgeToast, hudTrigger, hud);
+      overlay.append(stage, cornerPageCounter, imageLoadingBar, edgeToastStack, hudTrigger, hud);
 
       return overlay;
     },

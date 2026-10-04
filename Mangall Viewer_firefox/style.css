@@ -82,32 +82,46 @@
   height: 100vh;
 }
 
+.dcmv-image-render-box {
+  display: block;
+  position: relative;
+  flex: 0 0 auto;
+  max-width: 100vw;
+  max-height: 100vh;
+  box-sizing: border-box;
+}
+
 .dcmv-page-single .dcmv-image,
 .dcmv-page-single-landscape .dcmv-image,
 .dcmv-page-pair .dcmv-image {
   display: block;
+  width: 100%;
+  height: 100%;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
 }
 
-.dcmv-page-single .dcmv-image,
-.dcmv-page-single-landscape .dcmv-image {
-  width: 100vw;
-  height: 100%;
-  flex: 0 0 100vw;
-}
-
-.dcmv-page-pair .dcmv-image {
-  width: auto;
-  height: 100vh;
-  max-width: 50vw;
-  flex: 0 1 auto;
-}
-
 .dcmv-page-single-landscape {
   width: 100vw;
   height: 100vh;
+}
+
+/* 원본 파일 하나를 같은 비율의 여러 페이지로 나눠 보여준다. */
+.dcmv-image-render-box.dcmv-image-render-box-split {
+  overflow: hidden;
+}
+
+.dcmv-image-render-box.dcmv-image-render-box-split > .dcmv-image,
+.dcmv-dc-comment-layout > .dcmv-image-render-box.dcmv-image-render-box-split > .dcmv-image {
+  position: absolute;
+  left: 0;
+  width: 100% !important;
+  height: var(--dcmv-split-image-height) !important;
+  max-width: 100% !important;
+  max-height: none !important;
+  object-fit: fill !important;
+  top: var(--dcmv-split-image-top);
 }
 
 .dcmv-hud-trigger {
@@ -147,6 +161,21 @@
   pointer-events: auto;
 }
 
+.dcmv-edge-toast-stack {
+  position: fixed;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
 .dcmv-edge-toast {
   position: fixed;
   left: 50%;
@@ -168,8 +197,22 @@
   z-index: 2147483647;
 }
 
+.dcmv-edge-toast-stack > .dcmv-edge-toast {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  flex: 0 0 auto;
+  max-width: 100%;
+  transform: translateY(4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
 .dcmv-edge-toast.dcmv-edge-toast-visible {
   opacity: 1;
+}
+
+.dcmv-edge-toast-stack > .dcmv-edge-toast.dcmv-edge-toast-visible {
+  transform: translateY(0);
 }
 
 .dcmv-edge-toast.dcmv-edge-toast-error {
@@ -474,6 +517,10 @@
   overflow: hidden;
 }
 
+.dcmv-settings-long-image-split-wrap[hidden] {
+  display: none;
+}
+
 .dcmv-settings-item-main,
 .dcmv-settings-item-subaction {
   border: 0;
@@ -502,8 +549,8 @@
   transition: background 0.15s ease;
 }
 
-.dcmv-settings-item-main:hover,
-.dcmv-settings-item-subaction:hover {
+.dcmv-settings-item-main:not(:disabled):hover,
+.dcmv-settings-item-subaction:not(:disabled):hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -515,6 +562,12 @@
 
 .dcmv-settings-item-subaction[hidden] {
   display: none;
+}
+
+.dcmv-settings-item-main:disabled,
+.dcmv-settings-item-subaction:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .dcmv-settings-subaction-icon {
@@ -578,6 +631,70 @@
   font-weight: 700;
   letter-spacing: 0.2px;
   color: rgba(255, 255, 255, 0.78);
+}
+
+.dcmv-settings-external-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.5em;
+  transform: translateY(1px);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.dcmv-settings-external-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.dcmv-settings-open-extension-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 0;
+}
+
+.dcmv-settings-open-extension-options .dcmv-settings-item-label {
+  grid-column: 2;
+  grid-row: 1;
+  flex: 0 0 auto;
+}
+
+.dcmv-settings-open-extension-options .dcmv-settings-external-icon {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: start;
+}
+
+.dcmv-settings-advanced-toggle,
+.dcmv-settings-back-to-basic {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 0.5em;
+}
+
+.dcmv-settings-advanced-toggle .dcmv-settings-item-label,
+.dcmv-settings-back-to-basic .dcmv-settings-item-label {
+  grid-column: 2;
+  grid-row: 1;
+  flex: 0 0 auto;
+}
+
+.dcmv-settings-advanced-toggle .dcmv-nav-btn-arrow {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: start;
+  margin-left: 3px;
+}
+
+.dcmv-settings-back-to-basic .dcmv-nav-btn-arrow {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: end;
+  margin-right: 3px;
 }
 
 .dcmv-settings-switch::before {

@@ -108,7 +108,13 @@ function getSiteScriptFiles(adapter) {
   if (!adapter?.id) return [];
   if (String(adapter.id).startsWith("custom_")) return [];
 
-  return [`sites/${adapter.id}.js`];
+  const files = [`sites/${adapter.id}.js`];
+  if (adapter.id === "dcinside") {
+    files.push("sites/dcinside-comments.js");
+    files.push("sites/dcinside-long-image-split.js");
+  }
+
+  return files;
 }
 
 async function ensureViewerInjected(tabId, adapter) {

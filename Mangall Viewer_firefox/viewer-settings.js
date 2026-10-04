@@ -1,12 +1,16 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
-  const browserApi = globalThis.__dcmvBrowserApi;
   const DEFAULT_SETTINGS = {
     readingDirectionRTL: true,
     spreadEnabled: true,
     firstPageSingle: true,
     useWasd: true,
     autoFirstPageAdjust: false,
+    autoSplitLongImages: false,
+    showImageComments: false,
+    alwaysShowComments: true,
+    autoFullscreen: false,
+    forceBelowMode: false,
     showCornerPageCounter: false,
     fullscreenShortcut: "f",
     spreadShortcut: "",
@@ -18,6 +22,11 @@
     "firstPageSingle",
     "useWasd",
     "autoFirstPageAdjust",
+    "autoSplitLongImages",
+    "showImageComments",
+    "alwaysShowComments",
+    "autoFullscreen",
+    "forceBelowMode",
     "showCornerPageCounter"
   ];
   const TEXT_SETTING_FIELDS = [
@@ -28,7 +37,15 @@
 
   modules.settings = {
     getStorageArea() {
-      return browserApi?.getStorageArea?.() || null;
+      if (
+        typeof chrome === "undefined" ||
+        !chrome.storage ||
+        !chrome.storage.local
+      ) {
+        return null;
+      }
+
+      return chrome.storage.local;
     },
 
     loadSettings(storageKeys) {
@@ -46,6 +63,11 @@
             storageKeys.firstPageSingle,
             storageKeys.useWasd,
             storageKeys.autoFirstPageAdjust,
+            storageKeys.autoSplitLongImages,
+            storageKeys.showImageComments,
+            storageKeys.alwaysShowComments,
+            storageKeys.autoFullscreen,
+            storageKeys.forceBelowMode,
             storageKeys.showCornerPageCounter,
             storageKeys.fullscreenShortcut,
             storageKeys.spreadShortcut,
@@ -183,6 +205,45 @@
         "aria-pressed",
         targetState.autoFirstPageAdjust ? "true" : "false"
       );
+      if (targetState.settingsAutoLongImageSplitButton) {
+        targetState.settingsAutoLongImageSplitButton.hidden = !targetState.isDcinsideSite;
+        targetState.settingsAutoLongImageSplitButton.classList.toggle(
+          deps.toggleActiveClass,
+          !!targetState.autoSplitLongImages
+        );
+        targetState.settingsAutoLongImageSplitButton.setAttribute(
+          "aria-pressed",
+          targetState.autoSplitLongImages ? "true" : "false"
+        );
+      }
+      if (targetState.settingsLongImageSplitWrap) {
+        targetState.settingsLongImageSplitWrap.hidden = !targetState.isDcinsideSite;
+        targetState.settingsLongImageSplitWrap.classList.toggle(
+          deps.toggleActiveClass,
+          !!targetState.longImageSplitActive
+        );
+      }
+      if (targetState.settingsLongImageSplitButton) {
+        const nextPartCount = deps.getNextLongImageSplitPartCount?.(targetState) || 0;
+        targetState.settingsLongImageSplitButton.querySelector(
+          ".dcmv-settings-item-label"
+        ).textContent = !targetState.longImageSplitActive
+          ? "긴 이미지 자르기"
+          : nextPartCount > 0
+            ? `긴 이미지 1/${nextPartCount}로 자르기`
+            : "더 이상 자를 수 없음";
+        targetState.settingsLongImageSplitButton.disabled =
+          !!targetState.longImageSplitActive && nextPartCount === 0;
+        targetState.settingsLongImageSplitButton.setAttribute(
+          "aria-pressed",
+          targetState.longImageSplitActive ? "true" : "false"
+        );
+      }
+      if (targetState.settingsLongImageSplitClearButton) {
+        // 단면 재설정 되돌림 버튼처럼, 되돌릴 자르기가 있을 때만 보인다.
+        targetState.settingsLongImageSplitClearButton.hidden =
+          !targetState.longImageSplitActive;
+      }
       if (targetState.settingsCornerCounterButton) {
         targetState.settingsCornerCounterButton.querySelector(
           ".dcmv-settings-item-label"
@@ -196,6 +257,30 @@
           targetState.showCornerPageCounter ? "true" : "false"
         );
       }
+      targetState.settingsAutoFullscreenButton?.classList.toggle(
+        deps.toggleActiveClass,
+        targetState.autoFullscreen !== false
+      );
+      targetState.settingsAutoFullscreenButton?.setAttribute(
+        "aria-pressed",
+        targetState.autoFullscreen !== false ? "true" : "false"
+      );
+      if (targetState.settingsImageCommentsButton) {
+        const shouldShowImageCommentsSetting = !!targetState.isDcinsideSite;
+        targetState.settingsImageCommentsButton.hidden = !shouldShowImageCommentsSetting;
+        targetState.settingsImageCommentsButton.querySelector(
+          ".dcmv-settings-item-label"
+        ).textContent = "이미지 댓글 표시";
+        targetState.settingsImageCommentsButton.classList.toggle(
+          deps.toggleActiveClass,
+          !!targetState.showImageComments
+        );
+        targetState.settingsImageCommentsButton.setAttribute(
+          "aria-pressed",
+          targetState.showImageComments ? "true" : "false"
+        );
+      }
+
       deps.syncManualResetClearVisibility();
       deps.syncNavButtonLabels();
     },

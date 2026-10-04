@@ -1,17 +1,33 @@
-const browserApi = globalThis.__dcmvBrowserApi;
-const extensionApi = browserApi?.raw;
+// Firefox는 manifest의 background.scripts로 같은 파일들을 먼저 불러오므로
+// 서비스 워커(크롬)에서만 importScripts를 호출한다.
+if (typeof importScripts === "function") {
+  importScripts(
+    "site-registry.js",
+    "sites/universal-site-settings.js",
+    "sites/arca-live.js",
+    "sites/blogspot.js",
+    "sites/fc2.js",
+    "sites/dcinside.js",
+    "sites/kone.js"
+  );
+}
+
 const DEFAULT_SETTINGS = {
   readingDirectionRTL: true,
   spreadEnabled: true,
   firstPageSingle: true,
   useWasd: true,
   autoFirstPageAdjust: false,
+  autoSplitLongImages: false,
+  showImageComments: false,
+  alwaysShowComments: true,
   showCornerPageCounter: false,
   fullscreenShortcut: "f",
   spreadShortcut: "",
   resetPairingShortcut: "r"
 };
 const INITIAL_HUD_GUIDE_STORAGE_KEY = "shouldShowInitialHudGuide";
+const LONG_IMAGE_SPLIT_HINT_PENDING_STORAGE_KEY = "longImageSplitHintPending";
 const OPTIONS_MENU_ID = "dcmv-open-options";
 
 async function syncSiteRegistry() {
@@ -27,15 +43,16 @@ async function syncSiteRegistryAndMenus() {
 }
 
 function createContextMenu() {
-  browserApi.removeAllContextMenus().catch(() => undefined).then(async () => {
+  chrome.contextMenus.removeAll(() => {
+    // Firefox 툴바 아이콘 우클릭 메뉴에는 옵션 바로가기가 없어서 직접 추가한다.
     try {
-      await browserApi.createContextMenu({
+      chrome.contextMenus.create({
         id: OPTIONS_MENU_ID,
         title: "만갤 뷰어 설정 열기",
         contexts: ["action"]
       });
-    } catch {
-      // Firefox와 Chrome의 툴바 메뉴 지원 차이로 실패해도 사이트 메뉴 등록은 계속한다.
+    } catch (_) {
+      void chrome.runtime.lastError;
     }
 
     const adapters = globalThis.__dcmvSiteRegistry?.listSiteAdapters?.() || [];
@@ -49,14 +66,14 @@ function createContextMenu() {
       }
 
       try {
-        await browserApi.createContextMenu({
+        chrome.contextMenus.create({
           id: adapter.menuId,
           title: adapter.menuTitle || adapter.name || "DC Viewer",
           contexts: ["page", "image"],
           documentUrlPatterns: adapter.documentUrlPatterns
         });
-      } catch {
-        // Firefox와 Chrome의 컨텍스트 메뉴 정책 차이로 실패해도 나머지 메뉴 등록은 계속한다.
+      } catch (_) {
+        void chrome.runtime.lastError;
       }
     }
   });
@@ -69,39 +86,64 @@ function getCurrentAdapter(url) {
 function getSiteScriptFiles(adapter) {
   if (!adapter?.id) return [];
   if (String(adapter.id).startsWith("custom_")) return [];
-  return [`sites/${adapter.id}.js`];
+
+  const files = [`sites/${adapter.id}.js`];
+  if (adapter.id === "dcinside") {
+    files.push("sites/dcinside-comments.js");
+    files.push("sites/dcinside-long-image-split.js");
+  }
+
+  return files;
 }
 
 async function ensureViewerInjected(tabId, adapter) {
-  await browserApi.insertCss(tabId, ["style.css"]);
+  await chrome.scripting.insertCSS({
+    target: { tabId },
+    files: ["style.css"]
+  });
 
-  await browserApi.executeScript(tabId, [
-    "browser-api.js",
-    "site-registry.js",
-    "sites/universal-site-settings.js",
-    ...getSiteScriptFiles(adapter),
-    "viewer-common.js",
-    "viewer-ui.js",
-    "viewer-layout.js",
-    "viewer-hud.js",
-    "viewer-settings.js",
-    "viewer-navigation.js",
-    "viewer-page-loading.js",
-    "content.js"
-  ]);
+  const siteScriptFiles = getSiteScriptFiles(adapter);
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: [
+      "site-registry.js",
+      "sites/universal-site-settings.js",
+      ...siteScriptFiles,
+      "viewer-common.js",
+      "viewer-ui.js",
+      "viewer-layout.js",
+      "viewer-hud.js",
+      "viewer-settings.js",
+      "viewer-navigation.js",
+      "viewer-page-loading.js",
+      "content.js"
+    ]
+  });
 }
 
-async function openViewerInTab(tabId, targetImageUrl = "", providedUrl = "") {
+async function openViewerInTab(tabId, targetImageUrl = "", providedUrl = null) {
   await syncSiteRegistry();
 
-  const url = providedUrl || "";
-  if (!url) return;
+  let url = providedUrl;
+  
+  if (!url) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      url = tab?.url || "";
+    } catch (_) {
+      void chrome.runtime.lastError;
+      url = "";
+    }
+  }
 
+  if (!url) return;
+  
   const adapter = getCurrentAdapter(url);
   if (!adapter) return;
 
   await ensureViewerInjected(tabId, adapter);
-  await browserApi.sendMessage(tabId, {
+
+  await chrome.tabs.sendMessage(tabId, {
     type: "DCMV_OPEN",
     targetImageUrl,
     source: "toolbar"
@@ -121,10 +163,7 @@ function shouldOpenChangelog(previousVersion, currentVersion) {
 }
 
 function ensureDefaultSettings() {
-  const storageArea = browserApi.getStorageArea();
-  if (!storageArea) return;
-
-  storageArea.get(Object.keys(DEFAULT_SETTINGS), (result = {}) => {
+  chrome.storage?.local?.get(Object.keys(DEFAULT_SETTINGS), (result) => {
     const missingSettings = {};
 
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
@@ -134,34 +173,40 @@ function ensureDefaultSettings() {
     }
 
     if (Object.keys(missingSettings).length) {
-      storageArea.set(missingSettings);
+      chrome.storage.local.set(missingSettings);
     }
   });
 }
 
-browserApi.addRuntimeInstalledListener(async (details) => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   ensureDefaultSettings();
   if (details?.reason === "install") {
-    browserApi.getStorageArea()?.set({ [INITIAL_HUD_GUIDE_STORAGE_KEY]: true });
+    chrome.storage?.local?.set({
+      [INITIAL_HUD_GUIDE_STORAGE_KEY]: true,
+      [LONG_IMAGE_SPLIT_HINT_PENDING_STORAGE_KEY]: true
+    });
   }
-  await syncSiteRegistryAndMenus();
+  await syncSiteRegistry();
+  createContextMenu();
 
-  const currentVersion = extensionApi?.runtime?.getManifest?.().version || "";
-  if (details?.reason === "update" && shouldOpenChangelog(details.previousVersion, currentVersion)) {
-    const url = extensionApi?.runtime?.getURL?.("extension-settings.html#update-info");
-    if (url) {
-      extensionApi?.tabs?.create?.({ url });
-    }
+  if (
+    details?.reason === "update" &&
+    shouldOpenChangelog(details.previousVersion, chrome.runtime.getManifest().version)
+  ) {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL("extension-settings.html#update-info")
+    });
   }
 });
 
-browserApi.addRuntimeStartupListener(async () => {
-  await syncSiteRegistryAndMenus();
+chrome.runtime.onStartup.addListener(async () => {
+  await syncSiteRegistry();
+  createContextMenu();
 });
 
-browserApi.addContextMenuClickListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info?.menuItemId === OPTIONS_MENU_ID) {
-    extensionApi?.runtime?.openOptionsPage?.();
+    chrome.runtime.openOptionsPage();
     return;
   }
 
@@ -174,23 +219,27 @@ browserApi.addContextMenuClickListener((info, tab) => {
       if (!adapter || info.menuItemId !== adapter.menuId) return;
       return openViewerInTab(tab.id, info.srcUrl || "", url);
     })
-    .catch(() => undefined);
+    .catch(() => {
+      void chrome.runtime.lastError;
+    });
 });
 
-extensionApi?.action?.onClicked?.addListener((tab) => {
+chrome.action.onClicked.addListener((tab) => {
   if (!tab?.id) return;
 
-  openViewerInTab(tab.id, "", tab.url || "").catch(() => undefined);
+  openViewerInTab(tab.id, "", tab.url || "").catch(() => {
+    void chrome.runtime.lastError;
+  });
 });
 
-extensionApi?.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return undefined;
 
   if (message.type === "DCMV_RELOAD_CUSTOM_SITES") {
     syncSiteRegistryAndMenus()
-      .then(() => sendResponse?.({ success: true }))
+      .then(() => sendResponse({ success: true }))
       .catch((error) =>
-        sendResponse?.({
+        sendResponse({
           success: false,
           error: error instanceof Error ? error.message : String(error || "")
         })
@@ -199,12 +248,10 @@ extensionApi?.runtime?.onMessage?.addListener((message, sender, sendResponse) =>
   }
 
   if (message.type === "DCMV_OPEN_OPTIONS") {
-    extensionApi?.runtime?.openOptionsPage?.();
-    sendResponse?.({ success: true });
+    chrome.runtime.openOptionsPage();
+    sendResponse({ success: true });
     return undefined;
   }
 
   return undefined;
 });
-
-syncSiteRegistryAndMenus().catch(() => undefined);

@@ -816,6 +816,7 @@
       deps.setImageLoadingProgress(0.38);
       await deps.wakeLazyImages(targetState.root);
       if (deps.getState?.() !== targetState) return;
+
       deps.setHasAutoLazyWakeRun(true);
       deps.runInitialAutoWhenReady("lazy 깨우기 완료");
       deps.setImageLoadingProgress(0.62);
@@ -832,12 +833,12 @@
 
     async initialPostLazyRefreshRound(targetState, deps) {
       if (!targetState) return;
-
       const isCurrentState = () => deps.getState?.() === targetState;
       if (!isCurrentState()) return;
 
       const refreshResult = await deps.refreshSourceItemsFromDom();
       if (!isCurrentState()) return;
+
       const previousCount = targetState.totalCount;
       const previousRenderUrls = deps.getCurrentStepRenderUrls();
       const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(
@@ -852,6 +853,7 @@
         ? await deps.hydrateImageMetadata(targetState.sourceItems)
         : { orientationChangedPages: [] };
       if (!isCurrentState()) return;
+
       const retryResult = await deps.retryMissingItems();
       if (!isCurrentState()) return;
 
@@ -951,12 +953,14 @@
           targetState.backgroundLazyWakeCount = 1;
         }
         if (!isCurrentState()) return;
+
         if (!deps.getHasAutoLazyWakeRun()) {
           deps.setHasAutoLazyWakeRun(true);
         }
 
         const refreshResult = await deps.refreshSourceItemsFromDom();
         if (!isCurrentState()) return;
+
         const previousRenderUrls = deps.getCurrentStepRenderUrls();
         const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(
           targetState,
@@ -967,6 +971,7 @@
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
         const metadataResult = await deps.hydrateImageMetadata(targetState.sourceItems);
         if (!isCurrentState()) return;
+
         const retryResult = await deps.retryMissingItems();
         if (!isCurrentState()) return;
 
@@ -1021,16 +1026,12 @@
         let didChange = hadManualPairingReset;
 
         await deps.wakeLazyImages(targetState.root);
-        if (deps.getState?.() !== targetState) return;
         const refreshResult = await deps.refreshSourceItemsFromDom();
-        if (deps.getState?.() !== targetState) return;
         const previousRenderUrls = deps.getCurrentStepRenderUrls();
         const beforeDisplayFingerprint = getRepairCurrentDisplayFingerprint(targetState);
         deps.applyRefreshedSourceItems(refreshResult.nextSourceItems);
         const metadataResult = await deps.hydrateImageMetadata(targetState.sourceItems);
-        if (deps.getState?.() !== targetState) return;
         const retryResult = await deps.retryMissingItems();
-        if (deps.getState?.() !== targetState) return;
 
         const currentAnchorIndex = deps.getCurrentAnchorIndex();
         const layoutChanged = deps.applyRebuiltLayoutIfChanged(currentAnchorIndex);

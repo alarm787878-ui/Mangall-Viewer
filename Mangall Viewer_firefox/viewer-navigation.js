@@ -1,8 +1,5 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
-  const extensionApi =
-    globalThis.__dcmvBrowserApi?.raw ||
-    (typeof browser !== "undefined" ? browser : typeof chrome !== "undefined" ? chrome : null);
 
   modules.navigation = {
     bindEvents(targetState, deps) {
@@ -120,6 +117,7 @@
 
       const resize = () => {
         if (!deps.getState()) return;
+        deps.refreshCurrentStepRenderBoxes?.();
         deps.syncHudTrigger();
         deps.syncImageLoadingBarPosition();
       };
@@ -133,6 +131,7 @@
           state.ignoreNextFullscreenExitClose = false;
         }
 
+        deps.refreshCurrentStepRenderBoxes?.();
         deps.syncHudTrigger();
         deps.syncImageLoadingBarPosition();
       };
@@ -141,6 +140,22 @@
       const hideUpdateNotice = () => {
         const state = deps.getState();
         if (!state?.settingsUpdateNotice) return;
+        if (state.settingsUpdateNotice.classList.contains("dcmv-settings-update-notice-hidden")) return;
+
+        const remainingMs = (state.settingsUpdateNoticeDismissAt || Date.now()) - Date.now();
+        if (remainingMs > 0) {
+          // 3초 전에 마우스가 닿았다면 남은 시간이 지난 뒤에만 알림을 닫는다.
+          if (!state.settingsUpdateNoticeHideTimer) {
+            state.settingsUpdateNoticeHideTimer = setTimeout(() => {
+              state.settingsUpdateNoticeHideTimer = null;
+              if (deps.getState() === state) hideUpdateNotice();
+            }, Math.ceil(remainingMs));
+          }
+          return;
+        }
+
+        clearTimeout(state.settingsUpdateNoticeHideTimer);
+        state.settingsUpdateNoticeHideTimer = null;
         deps.markSettingsUpdateNoticeSeen?.();
         state.settingsUpdateNotice.classList.add("dcmv-settings-update-notice-hidden");
         deps.syncHudVisibility?.();
@@ -340,12 +355,49 @@
           actionEl.blur();
           deps.syncToggleVisuals();
           deps.saveSettings({ autoFirstPageAdjust: state.autoFirstPageAdjust });
+        } else if (action === "toggle-auto-long-image-split") {
+          state.autoSplitLongImages = !state.autoSplitLongImages;
+          actionEl.blur();
+          deps.syncToggleVisuals();
+          deps.saveSettings({ autoSplitLongImages: state.autoSplitLongImages });
+          // 자동 설정은 뷰어를 열 때 수동 자르기를 대신 실행하는 옵션이다.
+          // OFF로 바꿔도 현재 잘린 화면은 되돌리지 않는다.
+          if (state.autoSplitLongImages) {
+            deps
+              .setLongImageSplitActive?.(true, {
+                closeMenu: false,
+                notifyIfNoSplit: false
+              })
+              .catch(() => {});
+          }
         } else if (action === "toggle-corner-counter") {
           state.showCornerPageCounter = !state.showCornerPageCounter;
           actionEl.blur();
           deps.syncToggleVisuals();
           deps.updateCornerPageCounter?.();
           deps.saveSettings({ showCornerPageCounter: state.showCornerPageCounter });
+        } else if (action === "toggle-auto-fullscreen") {
+          state.autoFullscreen = !state.autoFullscreen;
+          actionEl.blur();
+          deps.syncToggleVisuals();
+          deps.saveSettings({ autoFullscreen: state.autoFullscreen });
+          // 설정 변경 시 전체화면 상태 동기화
+          if (state.autoFullscreen) {
+            deps.requestFullscreen?.();
+          } else {
+            deps.exitFullscreen?.();
+          }
+        } else if (action === "toggle-image-comments") {
+          state.showImageComments = !state.showImageComments;
+          actionEl.blur();
+          deps.syncToggleVisuals();
+          deps.syncDcImageCommentsForViewer?.();
+
+          deps.saveSettings({ showImageComments: state.showImageComments }).then(() => {
+            if (!deps.getState()) return;
+            deps.renderCurrentStep();
+            deps.syncHudTrigger();
+          });
         } else if (action === "toggle-advanced-settings") {
           const settingsSlider = state.settingsMenu.querySelector(".dcmv-settings-slider");
           if (settingsSlider) {
@@ -354,7 +406,13 @@
           actionEl.blur();
         } else if (action === "open-extension-options") {
           actionEl.blur();
-          extensionApi?.runtime?.sendMessage?.({ type: "DCMV_OPEN_OPTIONS" });
+          chrome.runtime?.sendMessage?.({ type: "DCMV_OPEN_OPTIONS" });
+        } else if (action === "split-long-images") {
+          actionEl.blur();
+          deps.setLongImageSplitActive?.(true, { advance: true }).catch(() => {});
+        } else if (action === "clear-long-image-split") {
+          actionEl.blur();
+          deps.setLongImageSplitActive?.(false).catch(() => {});
         } else if (action === "reset-pairing-from-current") {
           resetPairingFromCurrent(actionEl);
         } else if (action === "reset-pairing-from-current-clear") {

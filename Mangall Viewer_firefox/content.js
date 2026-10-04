@@ -19,16 +19,23 @@
     firstPageSingle: "firstPageSingle",
     useWasd: "useWasd",
     autoFirstPageAdjust: "autoFirstPageAdjust",
+    autoSplitLongImages: "autoSplitLongImages",
+    showImageComments: "showImageComments",
+    alwaysShowComments: "alwaysShowComments",
+    autoFullscreen: "autoFullscreen",
+    forceBelowMode: "forceBelowMode",
     showCornerPageCounter: "showCornerPageCounter",
     fullscreenShortcut: "fullscreenShortcut",
     spreadShortcut: "spreadShortcut",
     resetPairingShortcut: "resetPairingShortcut",
     shouldShowInitialHudGuide: "shouldShowInitialHudGuide",
-    settingsUpdateNoticeSeenKey: "settingsUpdateNoticeSeenKey"
+    settingsUpdateNoticeSeenKey: "settingsUpdateNoticeSeenKey",
+    longImageSplitHintPending: "longImageSplitHintPending"
   };
 
   const HUD_HIDE_DELAY = 180;
   const HUD_INITIAL_SHOW_DELAY = 1000;
+  const UPDATE_NOTICE_MIN_VISIBLE_MS = 3000;
   const NAV_THROTTLE_MS = 220;
   const HUD_TRIGGER_MARGIN_X = 28;
   const HUD_TRIGGER_MARGIN_Y = 20;
@@ -60,6 +67,7 @@
   const CURSOR_MOVE_THRESHOLD_PX = 4;
   const EDGE_TOAST_DURATION_MS = 1000;
   const EDGE_TOAST_COOLDOWN_ATTEMPTS = 3;
+  const LONG_IMAGE_SPLIT_HINT_MESSAGE = "긴 이미지 자르기 기능을 사용해보세요.";
 
   let state = null;
   let reopenedViewerPageKey = "";
@@ -68,10 +76,6 @@
   const commonUtils = globalThis.__dcmvCommon || {};
   const runtimeModules = globalThis.__dcmvModules || {};
   const siteRegistry = globalThis.__dcmvSiteRegistry || {};
-  const extensionRuntime =
-    globalThis.__dcmvBrowserApi?.raw?.runtime ||
-    (typeof browser !== "undefined" ? browser.runtime : null) ||
-    (typeof chrome !== "undefined" ? chrome.runtime : null);
   const VIEWER_DISPLAY_NAME = "만갤 뷰어";
   const CONTENT_INSTANCE_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let customAdaptersReadyPromise = null;
@@ -196,7 +200,7 @@
     return true;
   }
 
-  extensionRuntime?.onMessage?.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message) => {
     if (!message) return;
 
     if (message.type === "DCMV_UPDATE_SETTINGS") {
@@ -232,10 +236,31 @@
       return;
     }
 
+    // Firefox판은 자동 전체화면을 쓰지 않는다. 툴바 클릭/단축키가 페이지의 사용자 동작으로
+    // 인정되지 않아 전체화면 요청이 거부되기 때문이다. 수동 전체화면(F, 버튼)은 그대로 쓴다.
     openViewer(message, wasAlreadyFullscreen).catch(() => {
       showErrorToast(`${VIEWER_DISPLAY_NAME} 실행 중 오류가 발생했습니다.`, 3000);
     });
   });
+
+  document.addEventListener("dcmv:dcinside-comment-expanded", () => {
+    if (!state?.isDcinsideSite || !state?.showImageComments) return;
+    renderCurrentStep();
+    syncHudTrigger();
+  });
+
+  document.addEventListener("dcmv:dcinside-comment-layout-updated", () => {
+    if (!state?.isDcinsideSite || !state?.showImageComments) return;
+    syncHudTrigger();
+  });
+
+  function scheduleDcImageCommentRefresh() {
+    setTimeout(() => {
+      if (!state?.isDcinsideSite || !state?.showImageComments) return;
+      renderCurrentStep();
+      syncHudTrigger();
+    }, 500);
+  }
 
   function requestViewerDocumentFullscreen() {
     // API 호출 전 현재 사용자 활성화(User Activation) 상태인지 확인하여 브라우저의 강제 에러 로그 기록 방지
@@ -317,7 +342,7 @@
     const abortOpeningForPageChange = () => {
       if (getRawPageKey() === openedPageKey) return false;
 
-      // 이미지 수집 전에 주소가 바뀌면 선요청한 전체화면도 정리한다.
+      // 뷰어가 만들어지기 전에 주소가 바뀌면 선요청한 전체화면도 정리한다.
       if (!wasAlreadyFullscreen) {
         exitViewerDocumentFullscreen();
       }
@@ -382,6 +407,7 @@
     document.documentElement.classList.add(HIDE_SCROLLBAR_CLASS);
     document.body.classList.add(HIDE_SCROLLBAR_CLASS);
 
+    const isDcinsideSite = getCurrentSiteAdapter()?.id === "dcinside";
     state = {
       pageKey: openedPageKey,
       root,
@@ -410,16 +436,37 @@
       settingsAutoFirstPageSwitch: overlay.querySelector(
         ".dcmv-settings-auto-first-page-switch"
       ),
+      settingsAutoLongImageSplitButton: overlay.querySelector(
+        ".dcmv-settings-auto-long-image-split"
+      ),
+      settingsAutoLongImageSplitSwitch: overlay.querySelector(
+        ".dcmv-settings-auto-long-image-split-switch"
+      ),
+      settingsLongImageSplitWrap: overlay.querySelector(
+        ".dcmv-settings-long-image-split-wrap"
+      ),
+      settingsLongImageSplitButton: overlay.querySelector(
+        ".dcmv-settings-long-image-split"
+      ),
+      settingsLongImageSplitClearButton: overlay.querySelector(
+        ".dcmv-settings-long-image-split-clear"
+      ),
       settingsCornerCounterButton: overlay.querySelector(
         ".dcmv-settings-corner-counter"
       ),
       settingsCornerCounterSwitch: overlay.querySelector(
         ".dcmv-settings-corner-counter-switch"
       ),
+      settingsImageCommentsButton: overlay.querySelector(
+        ".dcmv-settings-image-comments"
+      ),
+      settingsAutoFullscreenButton: overlay.querySelector(
+        ".dcmv-settings-auto-fullscreen"
+      ),
       settingsManualResetClearButton: overlay.querySelector(
         ".dcmv-settings-manual-reset-clear"
       ),
-      edgeToast: overlay.querySelector(".dcmv-edge-toast"),
+      edgeToastStack: overlay.querySelector(".dcmv-edge-toast-stack"),
       cornerPageCounter: overlay.querySelector(".dcmv-corner-page-counter"),
       refreshButton: overlay.querySelector("[data-dcmv-action=\"refresh\"]"),
       fullscreenButton: overlay.querySelector("[data-dcmv-action=\"toggle-fullscreen\"]"),
@@ -431,6 +478,7 @@
       spreadToggle: overlay.querySelector(".dcmv-toggle-spread"),
       firstSingleToggle: overlay.querySelector(".dcmv-toggle-first-single"),
 
+      physicalSourceItems: isDcinsideSite ? sourceItems : null,
       sourceItems,
       totalCount: sourceItems.length,
 
@@ -459,11 +507,35 @@
         settings.autoFirstPageAdjust === undefined
           ? false
           : !!settings.autoFirstPageAdjust,
+      autoSplitLongImages:
+        settings.autoSplitLongImages === undefined
+          ? false
+          : !!settings.autoSplitLongImages,
+      longImageSplitActive: false,
+      longImageSplitDepth: 0,
+      isLongImageSplitRunning: false,
+      hasScheduledAutoLongImageSplit: false,
+      showImageComments:
+        settings.showImageComments === undefined
+          ? false
+          : !!settings.showImageComments,
+      autoFullscreen:
+        settings.autoFullscreen === undefined
+          ? true
+          : !!settings.autoFullscreen,
+      alwaysShowComments:
+        settings.alwaysShowComments === undefined
+          ? true
+          : !!settings.alwaysShowComments,
+      forceBelowMode:
+        settings.forceBelowMode === undefined
+          ? false
+          : !!settings.forceBelowMode,
       showCornerPageCounter:
         settings.showCornerPageCounter === undefined
           ? false
           : !!settings.showCornerPageCounter,
-      isDcinsideSite: getCurrentSiteAdapter()?.id === "dcinside",
+      isDcinsideSite,
       manualPairingResetIndices: [],
       hasRunInitialAutoAfterFirstImageLoadTrigger: false,
       hasRunInitialAutoAfterFirstImageLoad: false,
@@ -478,10 +550,11 @@
       navLockedUntil: 0,
       hudHideTimer: null,
       cursorHideTimer: null,
-      edgeToastTimer: null,
+      edgeToastTimers: new Map(),
       edgeToastCooldownRemaining: EDGE_TOAST_COOLDOWN_ATTEMPTS,
       didAutoAdjustFirstPageSingle: false,
       hasUserAdjustedFirstPageSingle: false,
+      dcImageCommentsWereOriginallyOff: false,
       isPointerOverHudZone: false,
       isPagePickerOpen: false,
       isSettingsMenuOpen: false,
@@ -510,6 +583,35 @@
           ? ""
           : String(message.targetImageUrl)
     };
+
+      if (state.isDcinsideSite) {
+        state.dcImageCommentsWereOriginallyOff =
+          runtimeModules.dcinsideComments?.isImageCommentDisabled?.() ?? false;
+        if (state.showImageComments && state.dcImageCommentsWereOriginallyOff) {
+          runtimeModules.dcinsideComments?.ensureImageCommentVisibility?.(true);
+          scheduleDcImageCommentRefresh();
+        }
+        // alwaysShowComments 값 전달 및 저장 콜백 설정
+        runtimeModules.dcinsideComments?.setAlwaysShowComments?.(state.alwaysShowComments);
+        runtimeModules.dcinsideComments?.setSaveAlwaysShowCommentsCallback?.((enabled) => {
+          state.alwaysShowComments = !!enabled;
+          runtimeModules.settings?.saveSettings?.(STORAGE_KEYS, {
+            alwaysShowComments: !!enabled
+          });
+        });
+        // forceBelowMode 값 전달 및 저장 콜백 설정
+        runtimeModules.dcinsideComments?.setForceBelowMode?.(state.forceBelowMode);
+        runtimeModules.dcinsideComments?.setSaveForceBelowModeCallback?.((enabled) => {
+          state.forceBelowMode = !!enabled;
+          runtimeModules.settings?.saveSettings?.(STORAGE_KEYS, {
+            forceBelowMode: !!enabled
+          });
+        });
+        // 초기 forceBelowMode 적용
+        if (state.forceBelowMode) {
+          runtimeModules.dcinsideComments?.applyForceBelowModeToAllLayouts?.();
+        }
+      }
 
     state.firstSingleCheckbox.checked = state.firstPageSingle;
 
@@ -549,6 +651,7 @@
     rebuildStepsKeepingAnchor(resolveInitialAnchorIndex());
     const hasAlreadyOpenedViewerOnPage = hasReopenedViewerPageKey();
     state.shouldSkipLazyWakeScroll = hasAlreadyOpenedViewerOnPage;
+    state.stage.style.visibility = "hidden";
     renderCurrentStep();
     syncHudTrigger();
     scheduleInitialPostLazyRefresh();
@@ -573,12 +676,17 @@
     }
 
     const prevState = state;
+    if (prevState.isDcinsideSite && prevState.dcImageCommentsWereOriginallyOff) {
+      runtimeModules.dcinsideComments?.ensureImageCommentVisibility?.(false);
+    }
     if (shouldSavePosition) {
       saveLastReadPosition(prevState);
     }
     clearTimeout(prevState.hudHideTimer);
     clearTimeout(prevState.cursorHideTimer);
-    clearTimeout(prevState.edgeToastTimer);
+    clearTimeout(prevState.settingsUpdateNoticeHideTimer);
+    runtimeModules.hud?.clearEdgeToasts?.(prevState);
+    runtimeModules.layout?.clearPreloadedImages?.();
     clearRepairTimers(prevState);
     markSettingsUpdateNoticeSeen();
 
@@ -692,6 +800,8 @@
       scheduleCursorHide,
       syncHudTrigger,
       syncImageLoadingBarPosition,
+      refreshCurrentStepRenderBoxes: () =>
+        runtimeModules.layout?.refreshCurrentStepRenderBoxes?.(state),
       togglePagePicker,
       toggleSettingsMenu,
       getLogicalNavigationForOverlayButton,
@@ -711,7 +821,11 @@
         spreadShortcut: state.spreadShortcut,
         resetPairingShortcut: state.resetPairingShortcut,
         autoFirstPageAdjust: state.autoFirstPageAdjust,
-        showCornerPageCounter: state.showCornerPageCounter
+        autoSplitLongImages: state.autoSplitLongImages,
+        showImageComments: state.showImageComments,
+        alwaysShowComments: state.alwaysShowComments,
+        autoFullscreen: state.autoFullscreen,
+        forceBelowMode: state.forceBelowMode
       }),
       requestFullscreen: requestViewerDocumentFullscreen,
       exitFullscreen: exitViewerDocumentFullscreen,
@@ -724,7 +838,9 @@
       clearSavedManualPairingResetIndices,
       markSettingsUpdateNoticeSeen,
       goToPageIndex,
-      getLogicalNavigationForViewportSide
+      getLogicalNavigationForViewportSide,
+      syncDcImageCommentsForViewer,
+      setLongImageSplitActive
     });
   }
 
@@ -781,7 +897,53 @@
     }
 
     state.settingsUpdateNoticeSeenKey = noticeKey;
+    state.settingsUpdateNoticeDismissAt = Date.now() + UPDATE_NOTICE_MIN_VISIBLE_MS;
     notice.classList.remove("dcmv-settings-update-notice-hidden");
+  }
+
+  async function prepareLongImageSplitHint() {
+    const targetState = state;
+    if (!targetState || targetState.hasPreparedLongImageSplitHint) return;
+    targetState.hasPreparedLongImageSplitHint = true;
+
+    if (
+      !targetState.isDcinsideSite ||
+      targetState.autoSplitLongImages ||
+      targetState.longImageSplitActive
+    ) {
+      return;
+    }
+
+    const shouldShowForOpeningPages = getPhysicalSourceItems(targetState)
+      .slice(0, 2)
+      .some((item) =>
+        runtimeModules.dcinsideLongImageSplit?.shouldSplitLongImage?.(item, {
+          isPlaceholderSize: isDcPlaceholderSize
+        })
+      );
+    if (!shouldShowForOpeningPages) return;
+
+    const notice = targetState.settingsUpdateNotice;
+    if (
+      !notice ||
+      !notice.classList.contains("dcmv-settings-update-notice-hidden")
+    ) {
+      return;
+    }
+
+    const storageKey = STORAGE_KEYS.longImageSplitHintPending;
+    const isHintPending = await getStorageValue(storageKey);
+    if (state !== targetState || isHintPending !== true) return;
+
+    // 이 안내는 업데이트 공지와 달리 표시되는 순간 사용자가 본 것으로 기록한다.
+    // 뷰어를 바로 닫아도 다음 실행에서 다시 나타나지 않게 하기 위함이다.
+    targetState.settingsUpdateNoticeSeenKey = "";
+    targetState.settingsUpdateNoticeDismissAt =
+      Date.now() + UPDATE_NOTICE_MIN_VISIBLE_MS;
+    notice.textContent = LONG_IMAGE_SPLIT_HINT_MESSAGE;
+    notice.classList.remove("dcmv-settings-update-notice-hidden");
+    syncHudVisibility();
+    setStorageValue(storageKey, false);
   }
 
   function markSettingsUpdateNoticeSeen() {
@@ -789,6 +951,9 @@
     const noticeKey = state?.settingsUpdateNoticeSeenKey;
     if (!notice || !noticeKey) return Promise.resolve();
     if (notice.classList.contains("dcmv-settings-update-notice-hidden")) {
+      return Promise.resolve();
+    }
+    if (Date.now() < (state.settingsUpdateNoticeDismissAt || Infinity)) {
       return Promise.resolve();
     }
 
@@ -811,7 +976,7 @@
 
   function getCurrentExtensionVersion() {
     try {
-      return extensionRuntime?.getManifest?.().version || "";
+      return chrome.runtime?.getManifest?.().version || "";
     } catch {
       return "";
     }
@@ -868,6 +1033,11 @@
   function syncToggleVisuals() {
     runtimeModules.settings?.syncToggleVisuals?.(state, {
       toggleActiveClass: TOGGLE_ACTIVE_CLASS,
+      getNextLongImageSplitPartCount: (targetState) =>
+        runtimeModules.dcinsideLongImageSplit?.getNextSplitPartCount?.(
+          targetState,
+          { isPlaceholderSize: isDcPlaceholderSize }
+        ) || 0,
       syncManualResetClearVisibility,
       syncNavButtonLabels
     });
@@ -1005,7 +1175,7 @@
   }
 
   function showErrorToast(message, durationMs = 3000) {
-    if (state?.edgeToast) {
+    if (state?.edgeToastStack) {
       showEdgeToast(message, durationMs, { isError: true });
       return;
     }
@@ -1082,7 +1252,7 @@
 
   function getSavedImageIndex(targetState = state) {
     const anchorItem = getPrimaryAnchorItem(targetState);
-    return anchorItem ? anchorItem.index : 0;
+    return anchorItem ? getSourceIndexForViewerItem(anchorItem) : 0;
   }
 
   function resolveInitialAnchorIndex() {
@@ -1101,7 +1271,9 @@
     const savedIndex = Number(savedPosition.index);
 
     if (Number.isInteger(savedIndex)) {
-      return Math.max(0, Math.min(savedIndex, state.sourceItems.length - 1));
+      const maxSourceIndex = Math.max(0, getPhysicalSourceItems(state).length - 1);
+      const sourceIndex = Math.max(0, Math.min(savedIndex, maxSourceIndex));
+      return findViewerIndexForSource(state.sourceItems, sourceIndex);
     }
 
     return 0;
@@ -1110,6 +1282,92 @@
   function rebuildStepsKeepingAnchor(anchorIndex) {
     runtimeModules.layout?.rebuildStepsKeepingAnchor?.(state, anchorIndex, {
       buildAllSteps
+    });
+  }
+
+  function getPhysicalSourceItems(targetState = state) {
+    return runtimeModules.dcinsideLongImageSplit?.getPhysicalSourceItems?.(targetState) ||
+      targetState?.sourceItems ||
+      [];
+  }
+
+  function createViewerSourceItems(physicalItems, splitDepth) {
+    return runtimeModules.dcinsideLongImageSplit?.createViewerSourceItems?.(
+      physicalItems,
+      splitDepth,
+      { isPlaceholderSize: isDcPlaceholderSize }
+    ) || { items: physicalItems, splitCount: 0 };
+  }
+
+  function getSourceIndexForViewerItem(item) {
+    return runtimeModules.dcinsideLongImageSplit?.getSourceIndexForViewerItem?.(item) ??
+      item?.index ??
+      0;
+  }
+
+  function findViewerIndexForSource(items, sourceIndex, preferredPart = "") {
+    return runtimeModules.dcinsideLongImageSplit?.findViewerIndexForSource?.(
+      items,
+      sourceIndex,
+      preferredPart
+    ) ?? Math.max(0, Math.min(sourceIndex, (items?.length || 1) - 1));
+  }
+
+  function setLongImageSplitActive(enabled, options = {}) {
+    return runtimeModules.dcinsideLongImageSplit?.setActive?.(
+      state,
+      enabled,
+      options,
+      {
+        getState: () => state,
+        getRawPageKey,
+        isPlaceholderSize: isDcPlaceholderSize,
+        hydrateImageMetadata,
+        getPrimaryAnchorItem,
+        saveManualPairingResetIndices,
+        rebuildStepsKeepingAnchor,
+        syncToggleVisuals,
+        syncManualResetClearVisibility,
+        renderCurrentStep,
+        syncHudTrigger,
+        updateCornerPageCounter,
+        toggleSettingsMenu,
+        showEdgeToast
+      }
+    ) || Promise.resolve(null);
+  }
+
+  function scheduleAutoLongImageSplitAfterInitialPaint() {
+    const targetState = state;
+    if (
+      !targetState?.isDcinsideSite ||
+      !targetState.autoSplitLongImages ||
+      targetState.longImageSplitActive ||
+      targetState.hasScheduledAutoLongImageSplit
+    ) {
+      return;
+    }
+
+    targetState.hasScheduledAutoLongImageSplit = true;
+
+    // 원본 페이지가 실제 화면에 한 번 그려진 다음 자동 자르기를 시작한다.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (
+          state !== targetState ||
+          !targetState.hasPresentedInitialViewer ||
+          !targetState.autoSplitLongImages ||
+          targetState.longImageSplitActive
+        ) {
+          return;
+        }
+
+        setLongImageSplitActive(true, {
+          notify: true,
+          notifyIfNoSplit: false,
+          closeMenu: false
+        }).catch(() => {});
+      });
     });
   }
   function getStepSignature(step) {
@@ -1265,10 +1523,21 @@
   }
 
   function saveManualPairingResetIndices(indices) {
+    // 긴 이미지 분할 여부가 바뀌어도 저장된 단면 재설정 위치가 틀어지지 않도록
+    // 화면상의 가상 페이지 번호 대신 원본 이미지 번호로 저장한다.
+    const sourceItems = Array.isArray(state?.sourceItems) ? state.sourceItems : [];
+    const persistedIndices = Array.from(
+      new Set(
+        (Array.isArray(indices) ? indices : [])
+          .map((index) => sourceItems[index])
+          .filter(Boolean)
+          .map(getSourceIndexForViewerItem)
+      )
+    ).sort((a, b) => a - b);
     runtimeModules.settings?.saveManualPairingResetIndices?.(
       getCurrentPageKey(),
       MANUAL_PAIRING_RESET_SESSION_KEY,
-      indices
+      persistedIndices
     );
   }
 
@@ -1321,7 +1590,10 @@
   }
 
   async function syncKnownDimensionsFromDom() {
-    await runtimeModules.pageLoading?.syncKnownDimensionsFromDom?.(state, {
+    const sourceState = state?.isDcinsideSite && state.physicalSourceItems
+      ? { ...state, sourceItems: state.physicalSourceItems }
+      : state;
+    await runtimeModules.pageLoading?.syncKnownDimensionsFromDom?.(sourceState, {
       refreshSourceItemsFromDom
     });
   }
@@ -1368,6 +1640,8 @@
       showHudTemporarily,
       showEdgeToast
     });
+    await prepareLongImageSplitHint();
+    scheduleAutoLongImageSplitAfterInitialPaint();
   }
 
   function countLandscapeAdjacentSinglePortraitSteps(
@@ -1438,10 +1712,12 @@
       preloadNearbySteps,
       flushDeferredRepairRender,
       refreshViewerStepLayout: () => {
-        syncHudTrigger();
-      }
+        runtimeModules.layout?.refreshCurrentStepRenderBoxes?.(state);
+        globalThis.__dcmvDcinsideComments?.updateAllCommentLayouts?.();
+      },
+      // 모서리 페이지 번호도 화면이 실제로 바뀔 때 같이 갱신한다.
+      onStepPresented: updateCornerPageCounter
     });
-    updateCornerPageCounter();
   }
 
   function flushDeferredRepairRender() {
@@ -1656,25 +1932,29 @@
   }
 
   async function hydrateImageMetadata(items, options = {}) {
-    return runtimeModules.pageLoading?.hydrateImageMetadata
-      ? runtimeModules.pageLoading.hydrateImageMetadata(items, options, {
-          imageMetadataBatchSize: IMAGE_METADATA_BATCH_SIZE,
-          loadImageMetadata,
-          isLandscapeLike,
-          convertPopUrlToDirectImageUrl,
-          imageMetadataTimeoutMs: IMAGE_METADATA_TIMEOUT_MS
-        })
-      : { orientationChangedPages: [] };
+    if (!runtimeModules.pageLoading?.hydrateImageMetadata) {
+      return { orientationChangedPages: [] };
+    }
+    const result = await runtimeModules.pageLoading.hydrateImageMetadata(items, options, {
+      imageMetadataBatchSize: IMAGE_METADATA_BATCH_SIZE,
+      loadImageMetadata,
+      isLandscapeLike,
+      convertPopUrlToDirectImageUrl,
+      imageMetadataTimeoutMs: IMAGE_METADATA_TIMEOUT_MS
+    });
+    runtimeModules.dcinsideLongImageSplit?.restoreSplitPartSizes?.(items);
+    return result;
   }
 
-  function loadImageMetadata(item, options = {}) {
-    return runtimeModules.pageLoading?.loadImageMetadata
-      ? runtimeModules.pageLoading.loadImageMetadata(item, options, {
-          isLandscapeLike,
-          convertPopUrlToDirectImageUrl,
-          imageMetadataTimeoutMs: IMAGE_METADATA_TIMEOUT_MS
-        })
-      : Promise.resolve();
+  async function loadImageMetadata(item, options = {}) {
+    if (!runtimeModules.pageLoading?.loadImageMetadata) return undefined;
+    const result = await runtimeModules.pageLoading.loadImageMetadata(item, options, {
+      isLandscapeLike,
+      convertPopUrlToDirectImageUrl,
+      imageMetadataTimeoutMs: IMAGE_METADATA_TIMEOUT_MS
+    });
+    runtimeModules.dcinsideLongImageSplit?.restoreSplitPartSizes?.([item]);
+    return result;
   }
 
   function findElementForSourceItem(root, targetItem) {
@@ -1751,6 +2031,20 @@
     return doc.documentElement.textContent || "";
   }
 
+  function syncDcImageCommentsForViewer() {
+    if (!state?.isDcinsideSite) return;
+    if (!state.dcImageCommentsWereOriginallyOff) return;
+    const shouldShow = !!state.showImageComments;
+    const wasDisabled =
+      runtimeModules.dcinsideComments?.isImageCommentDisabled?.() ?? false;
+    runtimeModules.dcinsideComments?.ensureImageCommentVisibility?.(
+      shouldShow
+    );
+    if (shouldShow && wasDisabled) {
+      scheduleDcImageCommentRefresh();
+    }
+  }
+
   function handleViewerImageError(item) {
     if (!state || !item) return;
 
@@ -1772,7 +2066,11 @@
       return { nextSourceItems: [], countChanged: false };
     }
 
-    return await runtimeModules.pageLoading.refreshSourceItemsFromDom(state, {
+    const sourceState = state?.isDcinsideSite && state.physicalSourceItems
+      ? { ...state, sourceItems: state.physicalSourceItems }
+      : state;
+
+    return await runtimeModules.pageLoading.refreshSourceItemsFromDom(sourceState, {
       getStableItemKey,
       collectSourceItems: async (root) => {
         if (!runtimeModules.pageLoading?.collectSourceItems) return [];
@@ -1798,7 +2096,22 @@
   }
 
   function applyRefreshedSourceItems(nextSourceItems) {
-    runtimeModules.pageLoading?.applyRefreshedSourceItems?.(state, nextSourceItems);
+    if (!state) return;
+
+    if (!state.isDcinsideSite || !runtimeModules.dcinsideLongImageSplit) {
+      runtimeModules.pageLoading?.applyRefreshedSourceItems?.(state, nextSourceItems);
+      return;
+    }
+
+    state.physicalSourceItems = nextSourceItems;
+    const displayResult = createViewerSourceItems(
+      nextSourceItems,
+      state.longImageSplitDepth
+    );
+    runtimeModules.pageLoading?.applyRefreshedSourceItems?.(
+      state,
+      displayResult.items
+    );
   }
 
   async function retryMissingItems() {
