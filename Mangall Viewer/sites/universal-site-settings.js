@@ -1,6 +1,10 @@
 ﻿(function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
   const STORAGE_KEY = "dcmv_customSites";
+  // 스크립트 이미지 목록 후보를 고를 때 첫 장이 실제로 열리는지 기다리는 최대 시간(ms)
+  const SCRIPT_IMAGE_PROBE_TIMEOUT_MS = 3000;
+  // 같은 주소를 여러 번 시험하지 않도록 결과(Promise)를 페이지가 살아있는 동안 기억한다.
+  const scriptImageProbeCache = new Map();
 
   const DEFAULT_CONTENT_SELECTORS = [
     "#contents",
@@ -1195,8 +1199,8 @@
       }
     },
 
-    chooseBestScriptImageList(lists) {
-      let best = null;
+    rankScriptImageLists(lists) {
+      const ranked = [];
       for (const list of lists) {
         const urls = [];
         const seen = new Set();
@@ -1234,22 +1238,72 @@
             : urls;
         const score = bestFolderCount * 1000 + orderedUrls.length - folderCounts.size * 5;
 
-        if (!best || score > best.score) {
-          best = { urls: orderedUrls, score };
-        }
+        ranked.push({ urls: orderedUrls, score });
       }
 
-      return best?.urls || [];
+      // sort는 점수가 같으면 원래 순서를 유지하므로, 동점일 땐 페이지에 먼저 나온 목록이 앞에 온다.
+      return ranked.sort((a, b) => b.score - a.score);
     },
 
-    collectScriptArraySourceItems() {
+    probeImageLoad(url) {
+      if (!url || typeof Image === "undefined") return Promise.resolve(false);
+
+      const cached = scriptImageProbeCache.get(url);
+      if (cached) return cached;
+
+      // 화면에 붙이지 않은 Image로 몰래 불러봐서 onload(성공)/onerror(엑박)를 확인한다.
+      const promise = new Promise((resolve) => {
+        const probe = new Image();
+        let done = false;
+        const finish = (loaded) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          probe.onload = null;
+          probe.onerror = null;
+          resolve(loaded);
+        };
+        const timer = setTimeout(() => finish(false), SCRIPT_IMAGE_PROBE_TIMEOUT_MS);
+
+        probe.onload = () => finish(probe.naturalWidth > 0);
+        probe.onerror = () => finish(false);
+        try {
+          probe.src = url;
+        } catch {
+          finish(false);
+        }
+      });
+
+      scriptImageProbeCache.set(url, promise);
+      return promise;
+    },
+
+    async chooseBestScriptImageList(lists) {
+      const ranked = this.rankScriptImageLists(lists);
+      if (!ranked.length) return [];
+
+      const tied = ranked.filter((candidate) => candidate.score === ranked[0].score);
+      if (tied.length === 1) return tied[0].urls;
+
+      // 같은 만화를 서버만 바꿔 담은 기본/예비 목록처럼 점수가 똑같으면,
+      // 각 목록의 첫 장을 동시에 불러보고 앞 순서부터 실제로 열리는 목록을 고른다.
+      // 모두 실패하면 예전처럼 첫 번째 목록을 쓴다.
+      const probes = tied.map((candidate) => this.probeImageLoad(candidate.urls[0]));
+      for (let i = 0; i < tied.length; i += 1) {
+        if (await probes[i]) return tied[i].urls;
+      }
+
+      return tied[0].urls;
+    },
+
+    async collectScriptArraySourceItems() {
       const lists = [];
       const scripts = Array.from(document.scripts || []);
       for (const script of scripts) {
         lists.push(...this.extractScriptArrayStringLists(script.textContent || ""));
       }
 
-      const urls = this.chooseBestScriptImageList(lists);
+      const urls = await this.chooseBestScriptImageList(lists);
       return urls.map((url, index) => this.buildSourceItem(url, null, url, index));
     },
 
@@ -1724,17 +1778,15 @@
               index
             )
           );
+          // 스크립트 목록은 첫 장을 시험 로딩할 수 있어서, 그 시험 요청이 섞이지 않도록
+          // 브라우저가 실제로 받은 이미지 목록(observed)을 먼저 확보해 둔다.
+          const observedItems = universalSiteSettings.collectObservedResourceItems({
+            minResourceStartTime: observedResourceStartTime
+          });
+          const scriptItems = await universalSiteSettings.collectScriptArraySourceItems();
           pushCandidate(rememberedDomItems, "dom");
-          pushCandidate(
-            universalSiteSettings.collectScriptArraySourceItems(),
-            "script"
-          );
-          pushCandidate(
-            universalSiteSettings.collectObservedResourceItems({
-              minResourceStartTime: observedResourceStartTime
-            }),
-            "observed"
-          );
+          pushCandidate(scriptItems, "script");
+          pushCandidate(observedItems, "observed");
 
           if (!candidates.length) {
             previousSelectedSource = null;
