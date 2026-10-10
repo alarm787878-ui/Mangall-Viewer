@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>만갤 뷰어 로컬 파일</title>
+  <link rel="icon" href="../icons/icon_32.png">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="local-viewer.css">
+</head>
+<body>
+  <main class="lv_root">
+    <header class="lv_hero">
+      <div class="lv_hero_badge">Local Files</div>
+      <h1 class="lv_hero_title">로컬 파일 보기</h1>
+      <p class="lv_hero_desc">내 컴퓨터의 폴더, 이미지, ZIP/CBZ 파일을 만갤 뷰어로 봅니다. 파일은 어디로도 전송되지 않고 이 브라우저 안에서만 읽습니다.</p>
+    </header>
+
+    <section class="lv_panel">
+      <div id="lv_drop_zone" class="lv_drop_zone" tabindex="0" role="button" aria-label="파일 선택 또는 끌어다 놓기">
+        <strong>폴더나 파일을 이 페이지 아무 곳에나 끌어다 놓으세요.</strong>
+        <span>폴더, 이미지, ZIP/CBZ를 여러 개 한꺼번에 넣을 수 있습니다. 뷰어로 보는 중에도 끌어다 놓으면 바로 바뀝니다.</span>
+      </div>
+
+      <div class="lv_button_row">
+        <button id="lv_pick_files_btn" class="lv_primary_btn" type="button">파일 열기</button>
+        <button id="lv_pick_folder_btn" class="lv_primary_btn" type="button">폴더 열기</button>
+        <button id="lv_open_viewer_btn" class="lv_secondary_btn" type="button">뷰어로 보기</button>
+        <button id="lv_clear_btn" class="lv_danger_btn" type="button">비우기</button>
+      </div>
+
+      <div class="lv_hidden_inputs" aria-hidden="true">
+        <input id="lv_file_input" type="file" accept="image/*,.zip,.cbz" multiple tabindex="-1">
+        <input id="lv_folder_input" type="file" webkitdirectory directory multiple tabindex="-1">
+      </div>
+
+      <div class="lv_status_row">
+        <div id="lv_status" class="lv_status" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="lv_panel lv_pages_panel">
+      <div class="lv_panel_header">
+        <h2 class="lv_panel_title">
+          <span id="lv_book_title">페이지 목록</span>
+          <span id="lv_summary" class="lv_summary"></span>
+        </h2>
+        <span class="lv_hint">썸네일을 누르면 그 페이지부터 봅니다.</span>
+      </div>
+      <div id="lv_page_list" class="lv_page_list is_empty"></div>
+    </section>
+  </main>
+
+  <!-- 뷰어가 이미지를 찾는 기준 위치. 로컬 어댑터가 목록을 직접 넘겨주므로 비어 있다. -->
+  <div id="lv_source_root" hidden></div>
+
+  <div id="lv_drop_overlay" class="lv_drop_overlay" hidden>
+    <div class="lv_drop_overlay_box">여기에 놓으면 바로 열립니다</div>
+  </div>
+  <div id="lv_toast" class="lv_toast" role="status" hidden></div>
+
+  <!-- 순서 중요: local-adapter.js는 site-registry.js 다음, content.js 이전이어야 한다. -->
+  <script src="../site-registry.js"></script>
+  <script src="local-adapter.js"></script>
+  <script src="../viewer-common.js"></script>
+  <script src="../viewer-ui.js"></script>
+  <script src="../viewer-layout.js"></script>
+  <script src="../viewer-hud.js"></script>
+  <script src="../viewer-settings.js"></script>
+  <script src="../viewer-navigation.js"></script>
+  <script src="../viewer-page-loading.js"></script>
+  <script src="../content.js"></script>
+  <script src="zip-reader.js"></script>
+  <script src="local-viewer.js"></script>
+</body>
+</html>

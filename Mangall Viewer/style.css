@@ -402,47 +402,216 @@
   fill: rgba(255, 255, 255, 0.92);
 }
 
-.dcmv-settings-update-notice {
+/* 안내 말풍선: 메뉴 줄과 상관없이 화면 오른쪽 아래에 뜬다. (viewer-hud.js의 showViewerNotice) */
+.dcmv-viewer-notice {
   position: absolute;
-  left: 50%;
-  bottom: calc(100% + 12px);
-  transform: translateX(-50%);
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  box-sizing: border-box;
   width: max-content;
-  max-width: min(260px, calc(100vw - 32px));
-  padding: 9px 12px;
+  min-width: 150px;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 12px 14px 14px;
+  overflow: hidden;
   border-radius: 12px;
-  background: rgba(64, 64, 64, 0.88);
-  color: rgba(255, 255, 255, 0.90);
+  background: rgba(64, 64, 64, 0.92);
+  color: rgba(255, 255, 255, 0.92);
   font-size: 13px;
   font-weight: 400;
   line-height: 1.45;
-  text-align: center;
-  white-space: normal;
-  pointer-events: none;
+  text-align: left;
+  /* 한글이 글자 단위가 아니라 띄어쓰기(단어) 단위로 줄바꿈되게 한다. */
+  word-break: keep-all;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.10),
     0 12px 26px rgba(0, 0, 0, 0.30);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   opacity: 1;
-  transition: opacity 0.16s ease, transform 0.16s ease;
-  z-index: 2;
+  visibility: visible;
+  transform: translateY(0);
+  transition: opacity 0.16s ease, transform 0.16s ease, visibility 0s linear 0s;
 }
 
-.dcmv-settings-update-notice::after {
+/* 숨은 상태: 투명해진 뒤 완전히 사라져서 클릭도 통과한다. */
+.dcmv-viewer-notice-hidden {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease, visibility 0s linear 0.16s;
+}
+
+/* 제목이 없으면 첫 줄 글자가 오른쪽 위 X 버튼과 겹치지 않게 오른쪽을 비운다. */
+.dcmv-viewer-notice:not(.dcmv-viewer-notice-has-title) {
+  padding-right: 30px;
+}
+
+/* 내용이 없는 칸(hidden)은 사이트 스타일과 상관없이 항상 숨긴다. */
+.dcmv-viewer-notice [hidden] {
+  display: none !important;
+}
+
+/* 제목: 가운데 정렬. 양쪽을 똑같이 비워서 X 버튼과 겹치지 않으면서 정확히 가운데에 온다. */
+.dcmv-viewer-notice-title {
+  margin: 0 0 6px;
+  padding: 0 22px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.dcmv-viewer-notice-text {
+  /* 문구 안의 줄바꿈 기호(\n) 자리에서 줄을 바꾼다. */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+/* 항목 목록: 사이트의 목록 스타일이 끼어들지 않게 기본값을 직접 지정한다. */
+.dcmv-viewer-notice-items {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dcmv-viewer-notice-item {
+  position: relative;
+  margin: 0;
+  padding: 0 0 0 13px;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+/* 항목 앞의 작은 점 */
+.dcmv-viewer-notice-item::before {
   content: "";
   position: absolute;
-  left: 50%;
-  top: 100%;
-  transform: translateX(-50%);
-  border-left: 7px solid transparent;
-  border-right: 7px solid transparent;
-  border-top: 7px solid rgba(64, 64, 64, 0.88);
+  left: 2px;
+  top: 0.62em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.75);
 }
 
-.dcmv-settings-update-notice-hidden {
-  opacity: 0;
-  transform: translateX(-50%) translateY(6px);
+.dcmv-viewer-notice-close {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dcmv-viewer-notice-close:hover,
+.dcmv-viewer-notice-close:focus-visible {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  outline: none;
+}
+
+.dcmv-viewer-notice-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 8px 0 0;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.14);
+  box-sizing: border-box;
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.dcmv-viewer-notice-link:hover,
+.dcmv-viewer-notice-link:focus-visible {
+  background: rgba(255, 255, 255, 0.26);
+  outline: none;
+}
+
+.dcmv-viewer-notice-link .dcmv-settings-external-icon {
+  margin-left: 0.4em;
+}
+
+/* 버튼이 있는 안내는 말풍선 폭을 "버튼 폭 + 조금"으로 정한다.
+   글자 칸은 폭을 0으로 잡아 말풍선을 넓히지 못하게 하고, 그 폭 안에서 줄을 바꾼다. */
+.dcmv-viewer-notice-has-link .dcmv-viewer-notice-title,
+.dcmv-viewer-notice-has-link .dcmv-viewer-notice-text,
+.dcmv-viewer-notice-has-link .dcmv-viewer-notice-items {
+  box-sizing: border-box;
+  width: 0;
+  min-width: 100%;
+}
+
+.dcmv-viewer-notice-actions {
+  text-align: center;
+}
+
+/* 말풍선이 버튼보다 양옆으로 얼마나 더 넓을지. 이 값을 키우면 말풍선이 넓어진다. */
+.dcmv-viewer-notice-has-link .dcmv-viewer-notice-actions {
+  padding: 0 12px;
+}
+
+/* 남은 시간 막대: 말풍선 아래쪽에서 오른쪽부터 줄어든다. */
+.dcmv-viewer-notice-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.dcmv-viewer-notice-progress-fill {
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.55);
+  transform-origin: left center;
+  transform: scaleX(1);
+}
+
+.dcmv-viewer-notice-running .dcmv-viewer-notice-progress-fill {
+  /* 시간(animation-duration)은 viewer-hud.js가 안내마다 직접 넣는다. */
+  animation: dcmv-viewer-notice-countdown 5s linear forwards;
+}
+
+/* 마우스를 올렸거나 다른 탭을 보는 동안에는 막대도 멈춘다. */
+.dcmv-viewer-notice-paused .dcmv-viewer-notice-progress-fill {
+  animation-play-state: paused;
+}
+
+@keyframes dcmv-viewer-notice-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
 
 .dcmv-fullscreen-btn {

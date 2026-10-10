@@ -35,7 +35,6 @@
 
   const HUD_HIDE_DELAY = 180;
   const HUD_INITIAL_SHOW_DELAY = 1000;
-  const UPDATE_NOTICE_MIN_VISIBLE_MS = 3000;
   const NAV_THROTTLE_MS = 220;
   const HUD_TRIGGER_MARGIN_X = 28;
   const HUD_TRIGGER_MARGIN_Y = 20;
@@ -428,7 +427,7 @@
       pagePickerList: overlay.querySelector(".dcmv-page-picker-list"),
       settingsMenu: overlay.querySelector(".dcmv-settings-menu"),
       settingsButton: overlay.querySelector(".dcmv-settings-btn"),
-      settingsUpdateNotice: overlay.querySelector(".dcmv-settings-update-notice"),
+      viewerNotice: overlay.querySelector(".dcmv-viewer-notice"),
       settingsUseWasdButton: overlay.querySelector(".dcmv-settings-use-wasd"),
       settingsUseWasdSwitch: overlay.querySelector(
         ".dcmv-settings-use-wasd-switch"
@@ -628,7 +627,7 @@
     }
 
     syncToggleVisuals();
-    await prepareSettingsUpdateNotice();
+    await prepareViewerNotice();
     await prepareInitialHudGuide();
 
     // 초기화 중 주소가 바뀌었거나 감시자가 뷰어를 닫았다면 이전 작업을 중단한다.
@@ -696,10 +695,10 @@
     }
     clearTimeout(prevState.hudHideTimer);
     clearTimeout(prevState.cursorHideTimer);
-    clearTimeout(prevState.settingsUpdateNoticeHideTimer);
     runtimeModules.hud?.clearEdgeToasts?.(prevState);
+    // 안내 말풍선은 조용히 치운다. (끝까지 못 봤으므로 "봤음"으로 기록하지 않는다)
+    runtimeModules.hud?.clearViewerNotice?.(prevState);
     clearRepairTimers(prevState);
-    markSettingsUpdateNoticeSeen();
 
     document.removeEventListener("keydown", prevState.handlers.keydown, true);
     window.removeEventListener("keydown", prevState.handlers.escHandler, true);
@@ -847,7 +846,6 @@
       syncManualResetClearVisibility,
       showEdgeToast,
       clearSavedManualPairingResetIndices,
-      markSettingsUpdateNoticeSeen,
       goToPageIndex,
       getLogicalNavigationForViewportSide,
       syncDcImageCommentsForViewer,
@@ -885,31 +883,58 @@
     });
   }
 
-  async function prepareSettingsUpdateNotice() {
-    const notice = state?.settingsUpdateNotice;
-    if (!notice) return;
-    state.settingsUpdateNoticeSeenKey = "";
+  // 뷰어를 열 때 띄울 안내(viewer-ui.js의 VIEWER_NOTICE)가 있는지 미리 확인해 둔다.
+  // 실제로 띄우는 건 첫 화면이 보인 뒤다. (로딩 중에 카운트다운이 지나가지 않게)
+  async function prepareViewerNotice() {
+    if (!state) return;
+    const targetState = state;
+    targetState.pendingViewerNotice = null;
 
-    const noticeMessage = notice.textContent.trim();
-    const noticeVersion = notice.dataset.noticeVersion || "";
-    const currentVersion = getCurrentExtensionVersion();
+    const config = runtimeModules.ui?.getViewerNoticeConfig?.();
+    const hasContent =
+      !!config?.title ||
+      !!config?.message ||
+      (Array.isArray(config?.items) && config.items.length > 0);
+    if (!config?.id || !hasContent) return;
+    if (config.onlyVersion && config.onlyVersion !== getCurrentExtensionVersion()) return;
 
-    if (!noticeVersion || !noticeMessage || noticeVersion !== currentVersion) {
-      notice.classList.add("dcmv-settings-update-notice-hidden");
-      return;
+    const seenNoticeId = await getStorageValue(STORAGE_KEYS.settingsUpdateNoticeSeenKey);
+    if (state !== targetState || seenNoticeId === config.id) return;
+
+    targetState.pendingViewerNotice = config;
+  }
+
+  function showPendingViewerNotice() {
+    const targetState = state;
+    const config = targetState?.pendingViewerNotice;
+    if (!config) return;
+    targetState.pendingViewerNotice = null;
+
+    const linkTarget = String(config.linkTarget || "");
+    runtimeModules.hud?.showViewerNotice?.(targetState, {
+      title: config.title,
+      message: config.message,
+      items: config.items,
+      seconds: config.seconds,
+      linkLabel: linkTarget ? config.linkLabel : "",
+      onLink: () => openSettingsPageTab(linkTarget),
+      // 시간이 다 되거나 X·바로가기 버튼으로 실제로 닫혔을 때만 "봤음"으로 기록한다.
+      onClose: () => {
+        setStorageValue(STORAGE_KEYS.settingsUpdateNoticeSeenKey, config.id);
+      }
+    });
+  }
+
+  // 설정 페이지(extension-settings.html)의 특정 탭을 새 탭으로 연다. 실제로 여는 건 background.js.
+  function openSettingsPageTab(tabName) {
+    try {
+      const result = chrome.runtime?.sendMessage?.({
+        type: "DCMV_OPEN_SETTINGS_TAB",
+        tab: tabName
+      });
+      result?.catch?.(() => {});
+    } catch {
     }
-
-    const storageKey = STORAGE_KEYS.settingsUpdateNoticeSeenKey;
-    const noticeKey = `${noticeVersion}|${noticeMessage}`;
-    const seenNoticeKey = await getStorageValue(storageKey);
-    if (seenNoticeKey === noticeKey) {
-      notice.classList.add("dcmv-settings-update-notice-hidden");
-      return;
-    }
-
-    state.settingsUpdateNoticeSeenKey = noticeKey;
-    state.settingsUpdateNoticeDismissAt = Date.now() + UPDATE_NOTICE_MIN_VISIBLE_MS;
-    notice.classList.remove("dcmv-settings-update-notice-hidden");
   }
 
   async function prepareLongImageSplitHint() {
@@ -934,10 +959,10 @@
       );
     if (!shouldShowForOpeningPages) return;
 
-    const notice = targetState.settingsUpdateNotice;
+    // 다른 안내(업데이트 안내 등)가 떠 있으면 이번에는 띄우지 않는다.
     if (
-      !notice ||
-      !notice.classList.contains("dcmv-settings-update-notice-hidden")
+      !targetState.viewerNotice ||
+      runtimeModules.hud?.isViewerNoticeVisible?.(targetState)
     ) {
       return;
     }
@@ -948,29 +973,10 @@
 
     // 이 안내는 업데이트 공지와 달리 표시되는 순간 사용자가 본 것으로 기록한다.
     // 뷰어를 바로 닫아도 다음 실행에서 다시 나타나지 않게 하기 위함이다.
-    targetState.settingsUpdateNoticeSeenKey = "";
-    targetState.settingsUpdateNoticeDismissAt =
-      Date.now() + UPDATE_NOTICE_MIN_VISIBLE_MS;
-    notice.textContent = LONG_IMAGE_SPLIT_HINT_MESSAGE;
-    notice.classList.remove("dcmv-settings-update-notice-hidden");
-    syncHudVisibility();
+    runtimeModules.hud?.showViewerNotice?.(targetState, {
+      message: LONG_IMAGE_SPLIT_HINT_MESSAGE
+    });
     setStorageValue(storageKey, false);
-  }
-
-  function markSettingsUpdateNoticeSeen() {
-    const notice = state?.settingsUpdateNotice;
-    const noticeKey = state?.settingsUpdateNoticeSeenKey;
-    if (!notice || !noticeKey) return Promise.resolve();
-    if (notice.classList.contains("dcmv-settings-update-notice-hidden")) {
-      return Promise.resolve();
-    }
-    if (Date.now() < (state.settingsUpdateNoticeDismissAt || Infinity)) {
-      return Promise.resolve();
-    }
-
-    // 실제로 말풍선이 사라지는 시점에만 "봤음"으로 저장한다.
-    state.settingsUpdateNoticeSeenKey = "";
-    return setStorageValue(STORAGE_KEYS.settingsUpdateNoticeSeenKey, noticeKey);
   }
 
   async function prepareInitialHudGuide() {
@@ -1651,6 +1657,7 @@
       showHudTemporarily,
       showEdgeToast
     });
+    showPendingViewerNotice();
     await prepareLongImageSplitHint();
     scheduleAutoLongImageSplitAfterInitialPaint();
   }

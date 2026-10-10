@@ -136,44 +136,8 @@
         deps.syncImageLoadingBarPosition();
       };
 
-      // 업데이트 알림 버블: 표시 위치는 viewer-ui.js, 사라지는 조건은 여기에서 모아 관리한다.
-      const hideUpdateNotice = () => {
-        const state = deps.getState();
-        if (!state?.settingsUpdateNotice) return;
-        if (state.settingsUpdateNotice.classList.contains("dcmv-settings-update-notice-hidden")) return;
-
-        const remainingMs = (state.settingsUpdateNoticeDismissAt || Date.now()) - Date.now();
-        if (remainingMs > 0) {
-          // 3초 전에 마우스가 닿았다면 남은 시간이 지난 뒤에만 알림을 닫는다.
-          if (!state.settingsUpdateNoticeHideTimer) {
-            state.settingsUpdateNoticeHideTimer = setTimeout(() => {
-              state.settingsUpdateNoticeHideTimer = null;
-              if (deps.getState() === state) hideUpdateNotice();
-            }, Math.ceil(remainingMs));
-          }
-          return;
-        }
-
-        clearTimeout(state.settingsUpdateNoticeHideTimer);
-        state.settingsUpdateNoticeHideTimer = null;
-        deps.markSettingsUpdateNoticeSeen?.();
-        state.settingsUpdateNotice.classList.add("dcmv-settings-update-notice-hidden");
-        deps.syncHudVisibility?.();
-      };
-
-      const updateNoticeTargetMouseenter = () => {
-        hideUpdateNotice();
-      };
-
-      const hideUpdateNoticeForAction = (action) => {
-        if (action === "toggle-page-picker" || action === "toggle-settings-menu") {
-          hideUpdateNotice();
-        }
-      };
-
       const hudMouseenter = (e) => {
         if (!deps.getState()) return;
-        hideUpdateNotice();
         deps.rememberPointerPosition(e.clientX, e.clientY);
         deps.updateHudHoverState(deps.isPointerInsideHudTrigger(e.clientX, e.clientY));
         clearTimeout(deps.getState().cursorHideTimer);
@@ -303,7 +267,6 @@
         if (!actionEl) return;
 
         const action = actionEl.getAttribute("data-dcmv-action");
-        hideUpdateNoticeForAction(action);
 
         if (action === "prev" || action === "next") {
           const direction = deps.getLogicalNavigationForOverlayButton(action);
@@ -470,7 +433,6 @@
         fullscreenchange,
         hudMouseenter,
         hudMouseleave,
-        updateNoticeTargetMouseenter,
         click,
         imageClick
       };
@@ -488,7 +450,6 @@
       targetState.overlay.addEventListener("click", imageClick, true);
       targetState.hud.addEventListener("mouseenter", hudMouseenter);
       targetState.hud.addEventListener("mouseleave", hudMouseleave);
-      targetState.pageCounter?.addEventListener("mouseenter", updateNoticeTargetMouseenter);
     },
 
     shouldIgnoreKeydown(e) {
@@ -509,8 +470,8 @@
         return e.shiftKey ? "prev" : "next";
       }
 
-      if (key === "arrowdown" || (targetState?.useWasd && key === "s")) return "next";
-      if (key === "arrowup" || (targetState?.useWasd && key === "w")) return "prev";
+      if (key === "arrowdown" || key === "pagedown" || (targetState?.useWasd && key === "s")) return "next";
+      if (key === "arrowup" || key === "pageup" || (targetState?.useWasd && key === "w")) return "prev";
 
       if (key === "arrowright" || (targetState?.useWasd && key === "d")) {
         return targetState?.readingDirectionRTL ? "prev" : "next";

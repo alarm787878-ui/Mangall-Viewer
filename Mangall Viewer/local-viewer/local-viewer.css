@@ -1,0 +1,310 @@
+/* 로컬 뷰어 페이지 전용 스타일. 확장 설정 페이지와 같은 느낌으로 맞췄다.
+   뷰어 자체 스타일(../style.css)은 dcmv- 이름만 쓰므로, 여기서는 lv_ 이름만 써서 겹치지 않게 한다. */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(47, 111, 237, 0.14), transparent 28%),
+    linear-gradient(180deg, #f5f7fb 0%, #edf1f8 100%);
+  color: #1c2430;
+  font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+}
+
+/* hidden 속성을 단 요소는 아래 display 설정과 상관없이 항상 숨긴다.
+   (뷰어 요소에 영향을 주지 않도록 이 페이지 요소에만 적용) */
+.lv_drop_overlay[hidden],
+.lv_toast[hidden],
+#lv_source_root[hidden] {
+  display: none !important;
+}
+
+.lv_root {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px 48px;
+}
+
+/* 뷰어가 떠 있는 동안 뒤쪽 썸네일은 그릴 필요가 없다. */
+body.lv_viewer_open .lv_pages_panel {
+  display: none;
+}
+
+.lv_hero {
+  margin-bottom: 18px;
+  padding: 28px 30px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 18px 44px rgba(20, 31, 56, 0.08);
+}
+
+.lv_hero_badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #dce8ff;
+  color: #2455bb;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lv_hero_title {
+  margin: 14px 0 8px;
+  font-size: 30px;
+  line-height: 1.15;
+}
+
+.lv_hero_desc {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #556171;
+}
+
+.lv_panel {
+  margin-top: 18px;
+  padding: 22px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 14px 36px rgba(20, 31, 56, 0.07);
+}
+
+.lv_panel_header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 14px;
+}
+
+.lv_panel_title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.lv_summary {
+  flex: none;
+  color: #6a7686;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.lv_hint {
+  color: #6a7686;
+  font-size: 13px;
+}
+
+.lv_drop_zone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 34px 20px;
+  border: 2px dashed #b9c6dd;
+  border-radius: 18px;
+  background: #f7f9fc;
+  color: #435065;
+  text-align: center;
+  cursor: pointer;
+}
+
+.lv_drop_zone strong {
+  color: #1c2430;
+  font-size: 16px;
+}
+
+.lv_drop_zone span {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.lv_drop_zone:hover,
+.lv_drop_zone:focus-visible {
+  border-color: #2f6fed;
+  background: #eef3fd;
+  outline: none;
+}
+
+.lv_button_row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.lv_primary_btn,
+.lv_secondary_btn,
+.lv_danger_btn {
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.lv_primary_btn {
+  padding: 12px 18px;
+  background: #2f6fed;
+  color: #fff;
+}
+
+.lv_secondary_btn {
+  padding: 12px 16px;
+  background: #e8edf6;
+  color: #334055;
+}
+
+.lv_danger_btn {
+  padding: 12px 14px;
+  background: #ffe0e4;
+  color: #b23147;
+}
+
+.lv_primary_btn:hover,
+.lv_secondary_btn:hover,
+.lv_danger_btn:hover {
+  filter: brightness(0.97);
+}
+
+.lv_primary_btn:disabled,
+.lv_secondary_btn:disabled,
+.lv_danger_btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+  filter: none;
+}
+
+/* 파일 선택 창을 띄우는 진짜 입력칸은 화면에 보이지 않게 둔다. */
+.lv_hidden_inputs {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lv_status_row {
+  margin-top: 14px;
+}
+
+.lv_status {
+  min-height: 20px;
+  font-size: 13px;
+  color: #566273;
+  overflow-wrap: anywhere;
+}
+
+.lv_status.is_error {
+  color: #ba3047;
+}
+
+.lv_status.is_success {
+  color: #157347;
+}
+
+.lv_page_list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 12px;
+}
+
+.lv_page_list.is_empty::before {
+  content: "아직 불러온 파일이 없습니다.";
+  grid-column: 1 / -1;
+  padding: 24px 0;
+  color: #8a95a5;
+  font-size: 14px;
+  text-align: center;
+}
+
+.lv_page_card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e1e7f1;
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lv_page_card:hover,
+.lv_page_card:focus-visible {
+  border-color: #2f6fed;
+  outline: none;
+}
+
+.lv_page_thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: 8px;
+  background: #eef1f6;
+  object-fit: contain;
+}
+
+.lv_page_meta {
+  overflow: hidden;
+  color: #435065;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 끌어다 놓는 중에 화면 전체를 덮는 안내. 마우스 이벤트는 통과시켜 깜빡임을 막는다. */
+.lv_drop_overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(20, 40, 90, 0.45);
+  pointer-events: none;
+}
+
+.lv_drop_overlay_box {
+  padding: 28px 40px;
+  border: 3px dashed rgba(255, 255, 255, 0.9);
+  border-radius: 22px;
+  background: rgba(20, 31, 56, 0.6);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+/* 뷰어를 보는 중에도 읽기 진행 상황을 보여주는 작은 알림 */
+.lv_toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  z-index: 2147483647;
+  max-width: min(80vw, 720px);
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: rgba(20, 24, 32, 0.88);
+  color: #fff;
+  font-size: 14px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  overflow-wrap: anywhere;
+}
+
+.lv_toast.is_error {
+  background: rgba(150, 30, 50, 0.92);
+}
