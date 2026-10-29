@@ -1,7 +1,9 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
   const MIN_LONG_IMAGE_RATIO = 2.4;
-  const MAX_SPLIT_DEPTH = 8;
+  // 분수 칸에 넣을 수 있는 아래 숫자 범위. 나중에 바꿀 값.
+  const MIN_SPLIT_PARTS = 2;
+  const MAX_SPLIT_PARTS = 20;
   const SIZE_PROBE_TIMEOUT_MS = 3000;
 
   function getPhysicalSourceItems(targetState) {
@@ -84,10 +86,10 @@
     }
   }
 
-  // 이미 자른 상태에서 뒤늦게 크기가 잡혀 아직 현재 단계로 잘리지 않은 긴 이미지 수.
+  // 이미 자른 상태에서 뒤늦게 크기가 잡혀 아직 현재 조각 수로 잘리지 않은 긴 이미지 수.
   function getPendingSplitCount(targetState, deps = {}) {
-    const splitDepth = targetState?.longImageSplitDepth || 0;
-    if (splitDepth <= 0) return 0;
+    const splitPartCount = targetState?.longImageSplitPartCount || 0;
+    if (splitPartCount <= 0) return 0;
 
     syncKnownSizesFromViewerItems(targetState, deps);
     const appliedPartCounts = new Map();
@@ -102,45 +104,36 @@
 
     return getPhysicalSourceItems(targetState).filter(
       (item, sourceIndex) => shouldSplitLongImage(item, deps) &&
-        appliedPartCounts.get(sourceIndex) !== getPartCount(item, splitDepth)
+        appliedPartCounts.get(sourceIndex) !== getPartCount(item, splitPartCount)
     ).length;
   }
 
-  function getPartCount(item, splitDepth) {
-    if (splitDepth <= 0) return 1;
+  function getPartCount(item, splitPartCount) {
+    if (splitPartCount <= 1) return 1;
     // 원본의 세로 픽셀 수보다 많은 조각을 만들지 않는다.
-    const maxPartsForImage = 2 ** Math.floor(Math.log2(Math.max(2, item.height)));
-    return Math.min(2 ** Math.min(splitDepth, MAX_SPLIT_DEPTH), maxPartsForImage);
+    return Math.min(splitPartCount, Math.max(1, Math.floor(item.height)));
   }
 
-  function getNextSplitPartCount(targetState, deps = {}) {
-    const currentDepth = targetState?.longImageSplitDepth || 0;
-    if (currentDepth === 0) return 2;
-    // 뒤늦게 크기가 잡혀 아직 안 잘린 긴 이미지가 있으면 버튼은 그 이미지들을
-    // 현재 단계로 자르므로, 라벨도 다음 단계가 아니라 현재 단계를 보여준다.
-    if (getPendingSplitCount(targetState, deps) > 0) return 2 ** currentDepth;
-    if (currentDepth >= MAX_SPLIT_DEPTH) return 0;
-    const nextDepth = currentDepth + 1;
-    return getPhysicalSourceItems(targetState).some(
-      (item) => shouldSplitLongImage(item, deps) &&
-        getPartCount(item, nextDepth) > getPartCount(item, currentDepth)
-    ) ? 2 ** nextDepth : 0;
+  // 분수 칸에 들어온 값을 허용 범위의 정수로 맞춘다. 숫자가 아니면 fallback을 쓴다.
+  function normalizeSplitPartCount(value, fallback = MIN_SPLIT_PARTS) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(MAX_SPLIT_PARTS, Math.max(MIN_SPLIT_PARTS, parsed));
   }
 
-  function createViewerSourceItems(physicalItems, splitDepth, deps = {}) {
+  function getTargetSplitPartCount(targetState) {
+    return normalizeSplitPartCount(targetState?.longImageSplitTargetCount);
+  }
+
+  function createViewerSourceItems(physicalItems, splitPartCount, deps = {}) {
     const items = [];
     let splitCount = 0;
-    let advancedCount = 0;
 
     for (let sourceIndex = 0; sourceIndex < physicalItems.length; sourceIndex += 1) {
       const sourceItem = physicalItems[sourceIndex];
-      if (splitDepth > 0 && shouldSplitLongImage(sourceItem, deps)) {
+      if (splitPartCount > 1 && shouldSplitLongImage(sourceItem, deps)) {
         splitCount += 1;
-        // 수동 버튼을 다시 누를 때마다 같은 원본을 두 배로 세분화한다.
-        const partCount = getPartCount(sourceItem, splitDepth);
-        if (partCount > getPartCount(sourceItem, splitDepth - 1)) {
-          advancedCount += 1;
-        }
+        const partCount = getPartCount(sourceItem, splitPartCount);
 
         // 실제 표시 크기는 고정하지 않고, 분할 페이지의 비율만 보존한다.
         // 창이나 모니터 크기가 바뀌면 이 비율을 기준으로 다시 맞춘다.
@@ -186,7 +179,7 @@
       });
     }
 
-    return { items, splitCount, advancedCount };
+    return { items, splitCount };
   }
 
   // 조각도 원본 긴 이미지 주소를 쓰므로, 공통 메타데이터 확인을 거치면
@@ -266,7 +259,7 @@
       item.longImageSplitIndex === item.longImageSplitCount - 1;
   }
 
-  function applyViewerSourceItems(targetState, splitDepth, deps = {}) {
+  function applyViewerSourceItems(targetState, splitPartCount, deps = {}) {
     const previousItems = Array.isArray(targetState.sourceItems)
       ? targetState.sourceItems
       : [];
@@ -281,11 +274,11 @@
 
     const result = createViewerSourceItems(
       getPhysicalSourceItems(targetState),
-      splitDepth,
+      splitPartCount,
       deps
     );
-    targetState.longImageSplitDepth = splitDepth;
-    targetState.longImageSplitActive = splitDepth > 0;
+    targetState.longImageSplitPartCount = splitPartCount;
+    targetState.longImageSplitActive = splitPartCount > 1;
     targetState.sourceItems = result.items;
     targetState.totalCount = result.items.length;
     targetState.manualPairingResetIndices = Array.from(
@@ -318,8 +311,8 @@
 
     targetState.isLongImageSplitRunning = true;
     try {
-      const currentDepth = targetState.longImageSplitDepth || 0;
-      if (!enabled && currentDepth === 0) {
+      const currentPartCount = targetState.longImageSplitPartCount || 0;
+      if (!enabled && currentPartCount === 0) {
         if (options.closeMenu !== false) deps.toggleSettingsMenu?.(false);
         return null;
       }
@@ -356,26 +349,21 @@
         return null;
       }
 
-      // 이미 자른 상태에서 뒤늦게 크기가 잡힌 긴 이미지가 있으면
-      // 단계를 올리지 않고 그 이미지들만 현재 단계로 따라 자른다.
-      const pendingCount = enabled ? getPendingSplitCount(targetState, deps) : 0;
-      let nextDepth = 0;
-      if (enabled && (currentDepth === 0 || pendingCount > 0)) {
-        nextDepth = Math.max(1, currentDepth);
-      } else if (enabled && options.advance === true) {
-        if (currentDepth >= MAX_SPLIT_DEPTH || !getNextSplitPartCount(targetState, deps)) {
-          if (options.notify !== false) {
-            deps.showEdgeToast?.("더 자를 긴 이미지를 찾지 못했습니다.", 2000);
-          }
-          return null;
+      // 분수 칸에서 고른 조각 수로 자른다. 이미 같은 조각 수로 잘려 있어도
+      // 뒤늦게 크기가 잡힌 긴 이미지가 있으면 그 이미지들까지 따라 자른다.
+      const nextPartCount = enabled ? getTargetSplitPartCount(targetState) : 0;
+      const pendingCount = enabled && nextPartCount === currentPartCount
+        ? getPendingSplitCount(targetState, deps)
+        : 0;
+      if (enabled && nextPartCount === currentPartCount && pendingCount === 0) {
+        if (options.notify !== false) {
+          deps.showEdgeToast?.(`이미 1/${nextPartCount}로 잘려 있습니다.`, 2000);
         }
-        nextDepth = currentDepth + 1;
-      } else if (enabled) {
         if (options.closeMenu !== false) deps.toggleSettingsMenu?.(false);
         return null;
       }
 
-      const result = applyViewerSourceItems(targetState, nextDepth, deps);
+      const result = applyViewerSourceItems(targetState, nextPartCount, deps);
       deps.rebuildStepsKeepingAnchor?.(result.anchorIndex);
       deps.syncToggleVisuals?.();
       deps.syncManualResetClearVisibility?.();
@@ -393,21 +381,10 @@
         if (!enabled) {
           deps.showEdgeToast?.("긴 이미지 자르기를 해제했습니다.", 2000);
         } else if (pendingCount > 0) {
-          // 따라 자른 뒤에는 남은 이미지가 없으므로 다음 단계 조각 수가 나온다.
-          const nextPartCount = getNextSplitPartCount(targetState, deps);
-          deps.showEdgeToast?.(
-            `새로 불러온 긴 이미지 ${pendingCount}장을 잘랐습니다.` +
-              (nextPartCount > 0 ? ` 1/${nextPartCount}로 자르려면 다시 눌러주세요.` : ""),
-            nextPartCount > 0 ? 3200 : 2400
-          );
-        } else if (nextDepth > 1) {
-          deps.showEdgeToast?.(
-            `긴 이미지 ${result.advancedCount}장을 각각 ${2 ** nextDepth}페이지로 나눴습니다.`,
-            2400
-          );
+          deps.showEdgeToast?.(`새로 불러온 긴 이미지 ${pendingCount}장을 잘랐습니다.`, 2400);
         } else if (result.splitCount > 0) {
           deps.showEdgeToast?.(
-            `긴 이미지 ${result.splitCount}장을 ${result.splitCount * 2}페이지로 나눴습니다.`,
+            `긴 이미지 ${result.splitCount}장을 각각 ${nextPartCount}페이지로 나눴습니다.`,
             2400
           );
         }
@@ -425,7 +402,8 @@
     getPhysicalSourceItems,
     getSourceIndexForViewerItem,
     shouldSplitLongImage,
-    getNextSplitPartCount,
+    normalizeSplitPartCount,
+    getTargetSplitPartCount,
     createViewerSourceItems,
     restoreSplitPartSizes,
     findViewerIndexForSource,

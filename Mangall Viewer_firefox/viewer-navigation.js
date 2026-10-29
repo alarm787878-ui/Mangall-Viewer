@@ -136,44 +136,8 @@
         deps.syncImageLoadingBarPosition();
       };
 
-      // 업데이트 알림 버블: 표시 위치는 viewer-ui.js, 사라지는 조건은 여기에서 모아 관리한다.
-      const hideUpdateNotice = () => {
-        const state = deps.getState();
-        if (!state?.settingsUpdateNotice) return;
-        if (state.settingsUpdateNotice.classList.contains("dcmv-settings-update-notice-hidden")) return;
-
-        const remainingMs = (state.settingsUpdateNoticeDismissAt || Date.now()) - Date.now();
-        if (remainingMs > 0) {
-          // 3초 전에 마우스가 닿았다면 남은 시간이 지난 뒤에만 알림을 닫는다.
-          if (!state.settingsUpdateNoticeHideTimer) {
-            state.settingsUpdateNoticeHideTimer = setTimeout(() => {
-              state.settingsUpdateNoticeHideTimer = null;
-              if (deps.getState() === state) hideUpdateNotice();
-            }, Math.ceil(remainingMs));
-          }
-          return;
-        }
-
-        clearTimeout(state.settingsUpdateNoticeHideTimer);
-        state.settingsUpdateNoticeHideTimer = null;
-        deps.markSettingsUpdateNoticeSeen?.();
-        state.settingsUpdateNotice.classList.add("dcmv-settings-update-notice-hidden");
-        deps.syncHudVisibility?.();
-      };
-
-      const updateNoticeTargetMouseenter = () => {
-        hideUpdateNotice();
-      };
-
-      const hideUpdateNoticeForAction = (action) => {
-        if (action === "toggle-page-picker" || action === "toggle-settings-menu") {
-          hideUpdateNotice();
-        }
-      };
-
       const hudMouseenter = (e) => {
         if (!deps.getState()) return;
-        hideUpdateNotice();
         deps.rememberPointerPosition(e.clientX, e.clientY);
         deps.updateHudHoverState(deps.isPointerInsideHudTrigger(e.clientX, e.clientY));
         clearTimeout(deps.getState().cursorHideTimer);
@@ -303,7 +267,6 @@
         if (!actionEl) return;
 
         const action = actionEl.getAttribute("data-dcmv-action");
-        hideUpdateNoticeForAction(action);
 
         if (action === "prev" || action === "next") {
           const direction = deps.getLogicalNavigationForOverlayButton(action);
@@ -409,7 +372,7 @@
           chrome.runtime?.sendMessage?.({ type: "DCMV_OPEN_OPTIONS" });
         } else if (action === "split-long-images") {
           actionEl.blur();
-          deps.setLongImageSplitActive?.(true, { advance: true }).catch(() => {});
+          deps.setLongImageSplitActive?.(true).catch(() => {});
         } else if (action === "clear-long-image-split") {
           actionEl.blur();
           deps.setLongImageSplitActive?.(false).catch(() => {});
@@ -459,6 +422,61 @@
         deps.goPrev(true);
       };
 
+      // 분수 칸: 누르면 숫자가 전체 선택돼 바로 새 숫자를 칠 수 있다.
+      // Enter를 치면 바로 그 숫자로 자른다. 칸 밖을 누르면 숫자만 확정되고,
+      // 이미 잘린 상태일 때만 그 숫자로 다시 자른다.
+      const splitCountInput = targetState.settingsLongImageSplitCountInput;
+      if (splitCountInput) {
+        // 마우스로 처음 누를 때는 mouseup이 전체 선택을 풀어버려서 한 번 막아준다.
+        let keepSelectionOnMouseUp = false;
+        splitCountInput.addEventListener("mousedown", () => {
+          keepSelectionOnMouseUp = splitCountInput.ownerDocument.activeElement !== splitCountInput;
+        });
+        splitCountInput.addEventListener("mouseup", (e) => {
+          if (!keepSelectionOnMouseUp) return;
+          keepSelectionOnMouseUp = false;
+          e.preventDefault();
+        });
+        splitCountInput.addEventListener("focus", () => splitCountInput.select());
+        splitCountInput.addEventListener("input", () => {
+          const digits = splitCountInput.value.replace(/\D/g, "");
+          if (digits !== splitCountInput.value) splitCountInput.value = digits;
+        });
+        const commitSplitCount = (state) => {
+          const fallback = state.longImageSplitTargetCount || 2;
+          const nextCount =
+            modules.dcinsideLongImageSplit?.normalizeSplitPartCount?.(
+              splitCountInput.value,
+              fallback
+            ) ?? fallback;
+          state.longImageSplitTargetCount = nextCount;
+          splitCountInput.value = `${nextCount}`;
+          return nextCount;
+        };
+        // Enter로 확정할 때는 blur가 일으키는 change에서 따로 자르지 않게 막는다.
+        let isCommittingByEnter = false;
+        splitCountInput.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          const state = deps.getState();
+          if (!state) return;
+          commitSplitCount(state);
+          isCommittingByEnter = true;
+          splitCountInput.blur();
+          isCommittingByEnter = false;
+          // Enter는 자르기 버튼을 누른 것처럼 바로 그 숫자로 자른다.
+          deps.setLongImageSplitActive?.(true).catch(() => {});
+        });
+        splitCountInput.addEventListener("change", () => {
+          const state = deps.getState();
+          if (!state || isCommittingByEnter) return;
+          const nextCount = commitSplitCount(state);
+          if (state.longImageSplitActive && state.longImageSplitPartCount !== nextCount) {
+            deps.setLongImageSplitActive?.(true, { closeMenu: false }).catch(() => {});
+          }
+        });
+      }
+
       targetState.handlers = {
         escHandler,
         escKeyupHandler,
@@ -470,7 +488,6 @@
         fullscreenchange,
         hudMouseenter,
         hudMouseleave,
-        updateNoticeTargetMouseenter,
         click,
         imageClick
       };
@@ -488,7 +505,6 @@
       targetState.overlay.addEventListener("click", imageClick, true);
       targetState.hud.addEventListener("mouseenter", hudMouseenter);
       targetState.hud.addEventListener("mouseleave", hudMouseleave);
-      targetState.pageCounter?.addEventListener("mouseenter", updateNoticeTargetMouseenter);
     },
 
     shouldIgnoreKeydown(e) {
@@ -509,8 +525,8 @@
         return e.shiftKey ? "prev" : "next";
       }
 
-      if (key === "arrowdown" || (targetState?.useWasd && key === "s")) return "next";
-      if (key === "arrowup" || (targetState?.useWasd && key === "w")) return "prev";
+      if (key === "arrowdown" || key === "pagedown" || (targetState?.useWasd && key === "s")) return "next";
+      if (key === "arrowup" || key === "pageup" || (targetState?.useWasd && key === "w")) return "prev";
 
       if (key === "arrowright" || (targetState?.useWasd && key === "d")) {
         return targetState?.readingDirectionRTL ? "prev" : "next";

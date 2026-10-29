@@ -54,6 +54,13 @@ body {
   text-align: left;
 }
 
+/* 링크(<a>)로 된 메뉴도 버튼과 똑같이 보이게 한다. */
+a.tab_btn {
+  display: block;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+
 .tab_btn:hover,
 .tab_btn.is_active {
   background: #e8edf6;

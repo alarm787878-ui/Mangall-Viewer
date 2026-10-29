@@ -34,6 +34,8 @@ const BASIC_VIEWER_SHORTCUTS = [
   "escape",
   "space",
   "shift+space",
+  "pageup",
+  "pagedown",
   "arrowup",
   "arrowdown",
   "arrowleft",

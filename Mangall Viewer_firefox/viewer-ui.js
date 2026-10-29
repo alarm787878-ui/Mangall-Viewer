@@ -1,10 +1,29 @@
 (function () {
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
-  const UPDATE_NOTICE = {
-    // 이 버전에서만 업데이트 알림을 한 번 표시한다.
-    // 예: version을 "1.5.5"로 바꾸면 1.5.5에서만 이 문구가 뜬다.
-    version: "1.6.1",
-    message: "디시에서 세로로 2장 이어 붙인 이미지도 뷰어로 볼 수 있게 업데이트 했습니다. 긴 이미지 자르기 버튼을 눌러주세요. 추가 설정에서 긴 이미지가 있을 때 자동으로 자르도록 설정할 수도 있습니다."
+  // 뷰어를 열었을 때 화면 오른쪽 아래에 한 번 띄우는 안내 말풍선 설정.
+  // 다음 안내를 띄우고 싶으면 이 안의 값만 바꾸면 된다.
+  // 띄울지 판단·"봤음" 기록은 content.js가 한다 (showPendingViewerNotice).
+  //   - 말풍선이 닫히면 chrome.storage.local의 "settingsUpdateNoticeSeenKey"에 아래 id를 저장한다.
+  //   - 테스트로 다시 보려면 설정 페이지에서 F12 → 콘솔에 입력:
+  //     chrome.storage.local.remove("settingsUpdateNoticeSeenKey")
+  const VIEWER_NOTICE = {
+    // 안내의 이름. 이 값을 새로 바꾸면 예전 안내를 본 사람에게도 다시 한 번 뜬다.
+    id: "update-1.7.2",
+    // 이 버전에서만 띄운다. 빈 글자("")로 두면 버전과 상관없이 띄운다.
+    onlyVersion: "1.7.2",
+    // 맨 위 가운데에 굵게 보이는 제목. 빈 글자("")면 제목 줄이 없다.
+    title: "",
+    // 제목 밑에 점(•)을 붙여 한 줄씩 보여줄 항목들. 필요 없으면 빈 목록([])으로 둔다.
+    items: [],
+    // 항목 대신(또는 항목 위에) 그냥 문장으로 보여줄 문구. \n 자리에서 줄이 바뀐다.
+    // 제목·항목·문구가 모두 비어 있으면 안내를 띄우지 않는다.
+    message: "",
+    // 바로가기 버튼 글자. 빈 글자("")로 두면 버튼이 생기지 않는다.
+    linkLabel: "업데이트 안내",
+    // 버튼을 누르면 열릴 설정 페이지의 탭 이름 (예: "update-info", "local-viewer")
+    linkTarget: "update-info",
+    // 몇 초 뒤에 자동으로 닫을지
+    seconds: 5
   };
 
   modules.ui = {
@@ -197,12 +216,34 @@
       const settingsButton = button("dcmv-btn dcmv-settings-btn", "toggle-settings-menu");
       settingsButton.setAttribute("aria-label", "설정");
       settingsButton.appendChild(settingsGearIcon());
-      const settingsUpdateNotice = el(
-        "div",
-        "dcmv-settings-update-notice dcmv-settings-update-notice-hidden"
+
+      // 안내 말풍선: 메뉴 줄과 따로 화면 오른쪽 아래에 뜬다.
+      // 버튼에는 data-dcmv-action을 달지 않는다. (뷰어의 다른 버튼 동작과 섞이지 않게,
+      // 누르는 동작은 viewer-hud.js의 말풍선 관리 코드가 직접 처리한다)
+      const viewerNotice = el("div", "dcmv-viewer-notice dcmv-viewer-notice-hidden");
+      viewerNotice.setAttribute("role", "status");
+      const viewerNoticeClose = el("button", "dcmv-viewer-notice-close", "×");
+      viewerNoticeClose.type = "button";
+      viewerNoticeClose.setAttribute("aria-label", "안내 닫기");
+      const viewerNoticeLink = el("button", "dcmv-viewer-notice-link");
+      viewerNoticeLink.type = "button";
+      viewerNoticeLink.append(
+        el("span", "dcmv-viewer-notice-link-label"),
+        externalLinkIcon()
       );
-      settingsUpdateNotice.dataset.noticeVersion = UPDATE_NOTICE.version;
-      settingsUpdateNotice.textContent = UPDATE_NOTICE.message;
+      const viewerNoticeActions = el("div", "dcmv-viewer-notice-actions");
+      viewerNoticeActions.appendChild(viewerNoticeLink);
+      // 남은 시간을 보여주는 막대 (점점 줄어든다)
+      const viewerNoticeProgress = el("div", "dcmv-viewer-notice-progress");
+      viewerNoticeProgress.appendChild(el("div", "dcmv-viewer-notice-progress-fill"));
+      viewerNotice.append(
+        viewerNoticeClose,
+        el("div", "dcmv-viewer-notice-title"),
+        el("div", "dcmv-viewer-notice-text"),
+        el("ul", "dcmv-viewer-notice-items"),
+        viewerNoticeActions,
+        viewerNoticeProgress
+      );
 
       const settingsMenu = el("div", "dcmv-settings-menu");
 
@@ -251,7 +292,28 @@
       longImageSplitClearButton.title = "긴 이미지 자르기 해제";
       longImageSplitClearButton.hidden = true;
       longImageSplitClearButton.appendChild(manualResetClearIcon());
-      longImageSplitWrap.append(longImageSplitButton, longImageSplitClearButton);
+      // 분수의 아래 숫자만 고칠 수 있게 "1/"은 글자로 두고 숫자 칸만 입력으로 만든다.
+      const longImageSplitFraction = el("label", "dcmv-settings-long-image-split-fraction");
+      longImageSplitFraction.title = "몇 조각으로 자를지 정하기";
+      const longImageSplitCountInput = el(
+        "input",
+        "dcmv-settings-long-image-split-count-input"
+      );
+      longImageSplitCountInput.type = "text";
+      longImageSplitCountInput.inputMode = "numeric";
+      longImageSplitCountInput.maxLength = 2;
+      longImageSplitCountInput.value = "2";
+      longImageSplitCountInput.setAttribute("aria-label", "긴 이미지를 나눌 조각 수");
+      longImageSplitFraction.append(
+        el("span", "dcmv-settings-long-image-split-numerator", "1/"),
+        longImageSplitCountInput
+      );
+      // 버튼 안에 넣으면 칸을 누를 때 자르기가 실행되므로 버튼 옆에 둔다.
+      longImageSplitWrap.append(
+        longImageSplitButton,
+        longImageSplitFraction,
+        longImageSplitClearButton
+      );
       const manualPairingResetButton = el(
         "div",
         "dcmv-settings-item dcmv-settings-item-split dcmv-settings-manual-reset-wrap"
@@ -384,7 +446,7 @@
       settingsSlider.append(basicSettings, advancedSettings);
 
       settingsMenu.append(settingsSlider);
-      settingsWrap.append(settingsButton, settingsMenu, settingsUpdateNotice);
+      settingsWrap.append(settingsButton, settingsMenu);
 
       const closeButton = button("dcmv-btn", "close", "닫기");
 
@@ -405,9 +467,22 @@
         closeButton,
         nextButton
       );
-      overlay.append(stage, cornerPageCounter, imageLoadingBar, edgeToastStack, hudTrigger, hud);
+      overlay.append(
+        stage,
+        cornerPageCounter,
+        imageLoadingBar,
+        edgeToastStack,
+        hudTrigger,
+        hud,
+        viewerNotice
+      );
 
       return overlay;
+    },
+
+    // 위 VIEWER_NOTICE 설정을 다른 파일(content.js)에서 읽을 수 있게 내보낸다.
+    getViewerNoticeConfig() {
+      return { ...VIEWER_NOTICE };
     },
 
     setRefreshButtonState(targetState, isRunning) {

@@ -26,6 +26,10 @@ const DEFAULT_SETTINGS = {
   spreadShortcut: "",
   resetPairingShortcut: "r"
 };
+// 업데이트 후 "업데이트 안내" 탭을 자동으로 열지 정하는 스위치.
+// 평소에는 false로 두고, 꼭 알려야 하는 큰 업데이트 때만 잠깐 true로 바꿔서 배포한다.
+// (true여도 앞자리 두 개가 바뀔 때만 열린다. 예: 1.6.x → 1.7.x)
+const OPEN_CHANGELOG_ON_UPDATE = false;
 const INITIAL_HUD_GUIDE_STORAGE_KEY = "shouldShowInitialHudGuide";
 const LONG_IMAGE_SPLIT_HINT_PENDING_STORAGE_KEY = "longImageSplitHintPending";
 const OPTIONS_MENU_ID = "dcmv-open-options";
@@ -190,6 +194,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   createContextMenu();
 
   if (
+    OPEN_CHANGELOG_ON_UPDATE &&
     details?.reason === "update" &&
     shouldOpenChangelog(details.previousVersion, chrome.runtime.getManifest().version)
   ) {
@@ -227,6 +232,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.action.onClicked.addListener((tab) => {
   if (!tab?.id) return;
 
+  // 로컬 뷰어 페이지는 확장 프로그램 자체 페이지라 아래 방식(스크립트 주입)이 안 통한다.
+  // 그 페이지에 직접 알려서 페이지가 스스로 뷰어를 열고 닫게 한다.
+  if (String(tab.url || "").startsWith(chrome.runtime.getURL("local-viewer/local-viewer.html"))) {
+    chrome.runtime
+      .sendMessage({ type: "DCMV_LOCAL_VIEWER_TOGGLE", tabId: tab.id })
+      .catch(() => {});
+    return;
+  }
+
   openViewerInTab(tab.id, "", tab.url || "").catch(() => {
     void chrome.runtime.lastError;
   });
@@ -249,6 +263,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "DCMV_OPEN_OPTIONS") {
     chrome.runtime.openOptionsPage();
+    sendResponse({ success: true });
+    return undefined;
+  }
+
+  // 뷰어 안내 말풍선의 바로가기 버튼: 설정 페이지의 특정 탭(예: update-info)을 새 탭으로 연다.
+  if (message.type === "DCMV_OPEN_SETTINGS_TAB") {
+    // 탭 이름은 영문 소문자·숫자·하이픈만 허용한다. (엉뚱한 주소가 붙지 않게)
+    const tabName = /^[a-z0-9-]+$/.test(String(message.tab || "")) ? message.tab : "";
+    chrome.tabs.create({
+      url: chrome.runtime.getURL(`extension-settings.html${tabName ? `#${tabName}` : ""}`)
+    });
     sendResponse({ success: true });
     return undefined;
   }
