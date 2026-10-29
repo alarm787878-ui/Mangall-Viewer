@@ -24,6 +24,7 @@
     alwaysShowComments: "alwaysShowComments",
     autoFullscreen: "autoFullscreen",
     forceBelowMode: "forceBelowMode",
+    alwaysExpandComments: "alwaysExpandComments",
     showCornerPageCounter: "showCornerPageCounter",
     fullscreenShortcut: "fullscreenShortcut",
     spreadShortcut: "spreadShortcut",
@@ -455,6 +456,9 @@
       settingsLongImageSplitClearButton: overlay.querySelector(
         ".dcmv-settings-long-image-split-clear"
       ),
+      settingsLongImageSplitCountInput: overlay.querySelector(
+        ".dcmv-settings-long-image-split-count-input"
+      ),
       settingsCornerCounterButton: overlay.querySelector(
         ".dcmv-settings-corner-counter"
       ),
@@ -516,7 +520,9 @@
           ? false
           : !!settings.autoSplitLongImages,
       longImageSplitActive: false,
-      longImageSplitDepth: 0,
+      // 실제로 잘린 조각 수(0이면 안 자름)와 분수 칸에서 고른 조각 수.
+      longImageSplitPartCount: 0,
+      longImageSplitTargetCount: 2,
       isLongImageSplitRunning: false,
       hasScheduledAutoLongImageSplit: false,
       showImageComments:
@@ -535,6 +541,7 @@
         settings.forceBelowMode === undefined
           ? false
           : !!settings.forceBelowMode,
+      alwaysExpandComments: !!settings.alwaysExpandComments,
       showCornerPageCounter:
         settings.showCornerPageCounter === undefined
           ? false
@@ -609,6 +616,14 @@
           state.forceBelowMode = !!enabled;
           runtimeModules.settings?.saveSettings?.(STORAGE_KEYS, {
             forceBelowMode: !!enabled
+          });
+        });
+        // 항상 펼치기 값 전달 및 저장 콜백 설정
+        runtimeModules.dcinsideComments?.setAlwaysExpandComments?.(state.alwaysExpandComments);
+        runtimeModules.dcinsideComments?.setSaveAlwaysExpandCommentsCallback?.((enabled) => {
+          state.alwaysExpandComments = !!enabled;
+          runtimeModules.settings?.saveSettings?.(STORAGE_KEYS, {
+            alwaysExpandComments: !!enabled
           });
         });
         // 초기 forceBelowMode 적용
@@ -835,7 +850,8 @@
         showImageComments: state.showImageComments,
         alwaysShowComments: state.alwaysShowComments,
         autoFullscreen: state.autoFullscreen,
-        forceBelowMode: state.forceBelowMode
+        forceBelowMode: state.forceBelowMode,
+        alwaysExpandComments: state.alwaysExpandComments
       }),
       requestFullscreen: requestViewerDocumentFullscreen,
       exitFullscreen: exitViewerDocumentFullscreen,
@@ -1050,11 +1066,6 @@
   function syncToggleVisuals() {
     runtimeModules.settings?.syncToggleVisuals?.(state, {
       toggleActiveClass: TOGGLE_ACTIVE_CLASS,
-      getNextLongImageSplitPartCount: (targetState) =>
-        runtimeModules.dcinsideLongImageSplit?.getNextSplitPartCount?.(
-          targetState,
-          { isPlaceholderSize: isDcPlaceholderSize }
-        ) || 0,
       syncManualResetClearVisibility,
       syncNavButtonLabels
     });
@@ -2123,7 +2134,7 @@
     state.physicalSourceItems = nextSourceItems;
     const displayResult = createViewerSourceItems(
       nextSourceItems,
-      state.longImageSplitDepth
+      state.longImageSplitPartCount
     );
     runtimeModules.pageLoading?.applyRefreshedSourceItems?.(
       state,

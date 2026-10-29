@@ -11,7 +11,13 @@
     styleInjected: false,
     resizeBound: false,
     collapsedCommentKeys: new Set(),
-    emptyCommentStates: new Map()
+    emptyCommentStates: new Map(),
+    // 작성란을 펼쳐둔 댓글창 키 (화면을 다시 그려도 열린 상태 유지)
+    writeOpenKeys: new Set(),
+    // 방금 등록 버튼을 누른 댓글창 키 (실패해서 글이 남아 있으면 작성란을 다시 연다)
+    writeSubmitKeys: new Set(),
+    // 접힌 창에서 연필을 눌러 펼친 경우, 다시 그려진 뒤 입력칸에 커서를 줄 댓글창 키
+    focusWriteKey: ""
   };
   const COMMENT_EXPAND_EVENT = "dcmv:dcinside-comment-expanded";
   const COMMENT_LAYOUT_EVENT = "dcmv:dcinside-comment-layout-updated";
@@ -67,6 +73,31 @@
     return forceBelowMode;
   }
 
+  // 항상 펼치기: 켜져 있으면 접힌 이미지 댓글을 전부 자동으로 펼친다
+  // 외부(content.js)에서 저장된 값 주입 및 저장 콜백 제공
+  let alwaysExpandComments = false;
+  let saveAlwaysExpandCommentsCallback = null;
+  // 디시는 한꺼번에 몰린 요청 일부에 빈 응답을 준다 (10개 동시 → 2개 실패 확인)
+  const AUTO_EXPAND_BATCH_SIZE = 5; // 한 번에 보내는 디시 요청 수
+  const AUTO_EXPAND_BATCH_GAP_MS = 500; // 묶음 사이 쉬는 시간
+  const AUTO_EXPAND_FAIL_EXTRA_GAP_MS = 1000; // 묶음에 실패가 있으면 추가로 더 쉬는 시간
+  const AUTO_EXPAND_WAIT_MS = 1500; // 한 묶음이 펼쳐질 때까지 기다리는 최대 시간 (정상 응답은 0.1초 안팎)
+  const AUTO_EXPAND_MAX_TRIES = 2; // 같은 댓글창 최대 시도 횟수 (무한 반복 방지)
+  const autoExpandRun = { running: false, rerun: false, timer: 0 };
+  const autoExpandTries = new Map();
+  // 자동 펼치기로 열린 댓글창 키: 이것만 눈 아이콘 숨김 모드를 따른다
+  const autoExpandedKeys = new Set();
+
+  function setAlwaysExpandComments(value) {
+    alwaysExpandComments = !!value;
+    syncAlwaysExpandButtons();
+    scheduleAutoExpandAll();
+  }
+
+  function setSaveAlwaysExpandCommentsCallback(callback) {
+    saveAlwaysExpandCommentsCallback = callback;
+  }
+
   function isHasCommentsPanel(panel) {
     return (
       panel instanceof HTMLElement &&
@@ -88,27 +119,69 @@
     });
   }
 
-  function createEyeIconSvg(slashed) {
+  // 댓글창 아이콘 공통 규칙
+  // - 모든 그림은 세로 24칸 기준으로 그리고 화면에서는 18px 높이로 표시 (같은 크기·선 굵기)
+  // - 가로는 그림이 실제로 차지하는 만큼만 쓴다: x = 그림 왼쪽 끝, width = 그림 폭 (선 굵기 포함)
+  // - 버튼 사이 간격은 CSS(버튼 좌우 여백 + 줄 간격) 한 곳에서만 정하므로,
+  //   새 아이콘은 여기에 그림과 x/width만 적으면 간격이 자동으로 맞는다
+  // - 선 굵기는 그림 크기와 상관없이 화면에서 항상 1.5px (non-scaling-stroke)
+  const ICON_STROKE =
+    'stroke="rgba(255,255,255,0.92)" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"';
+  const ICON_HEIGHT_PX = 18;
+  const COMMENT_ICONS = {
+    // 댓글창 아래로: 화살표 + 바닥 줄
+    down: { x: 4, width: 16, body: `<path d="M12 3v12M7 10l5 5 5-5M5 20h14" ${ICON_STROKE}/>` },
+    // 댓글창 옆으로 되돌리기: 아래로 아이콘을 위아래 뒤집은 모양 (윗줄 + 위 화살표)
+    up: { x: 4, width: 16, body: `<path d="M12 21V9M7 14l5-5 5 5M5 4h14" ${ICON_STROKE}/>` },
+    eye: {
+      x: 1,
+      width: 22,
+      body: `<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" ${ICON_STROKE}/><circle cx="12" cy="12" r="3" ${ICON_STROKE}/>`
+    },
+    // 항상 펼치기: 목록 + 아래 화살표
+    alwaysExpand: {
+      x: 2,
+      width: 21,
+      body: `<path d="M3 6h11M3 12h11M3 18h11M19 5v13M16 15l3 3 3-3" ${ICON_STROKE}/>`
+    },
+    // 연필: 댓글 쓰기
+    pencil: { x: 3, width: 18, body: `<path d="M16 4l4 4L8 20H4v-4L16 4ZM13 7l4 4" ${ICON_STROKE}/>` },
+    // 말풍선: 둥근 사각형 + 왼쪽 아래 꼬리
+    bubble: {
+      x: 2,
+      width: 20,
+      body: `<path d="M6 4h12a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-7l-4 3.5V16H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Z" ${ICON_STROKE}/>`
+    }
+  };
+
+  // 꺼짐 상태는 그림 폭에 맞춰 왼쪽 위 → 오른쪽 아래 사선
+  function createIconSvg(name, slashed = false) {
+    const { x, width, body } = COMMENT_ICONS[name];
     const slashLine = slashed
-      ? `<line x1="2" y1="2" x2="22" y2="22" stroke="rgba(255,255,255,0.92)" stroke-width="1.8" stroke-linecap="round"/>`
+      ? `<line x1="${x + 1}" y1="2" x2="${x + width - 1}" y2="22" ${ICON_STROKE}/>`
       : "";
-    return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;pointer-events:none;">
-      <path d="M1 12C1 12 5 5 12 5C19 5 23 12 23 12C23 12 19 19 12 19C5 19 1 12 1 12Z" stroke="rgba(255,255,255,0.92)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="12" cy="12" r="3" stroke="rgba(255,255,255,0.92)" stroke-width="1.6"/>
-      ${slashLine}
-    </svg>`;
+    const widthPx = (width * ICON_HEIGHT_PX) / 24;
+    return `<svg width="${widthPx}" height="${ICON_HEIGHT_PX}" viewBox="${x} 0 ${width} 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;pointer-events:none;">${body}${slashLine}</svg>`;
+  }
+
+  function createEyeIconSvg(slashed) {
+    return createIconSvg("eye", slashed);
   }
 
   function createDownArrowIconSvg() {
-    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;pointer-events:none;">
-      <path d="M12 5v14M5 12l7 7 7-7" stroke="rgba(255,255,255,0.92)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>`;
+    return createIconSvg("down");
   }
 
   function createUpArrowIconSvg() {
-    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;pointer-events:none;">
-      <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>`;
+    return createIconSvg("up");
+  }
+
+  function createAlwaysExpandIconSvg(slashed) {
+    return createIconSvg("alwaysExpand", slashed);
+  }
+
+  function createCommentBubbleIconSvg() {
+    return createIconSvg("bubble");
   }
 
   function toAbsoluteUrl(url) {
@@ -615,6 +688,76 @@
     }
   }
 
+  // 작성란 접기: 평소엔 작성란을 숨기고, 버튼 줄 왼쪽의 연필 버튼으로 열고 닫는다
+  function setupCompactWriteBox(panel, commentKey) {
+    if (!(panel instanceof HTMLElement)) return;
+
+    const writeBox = panel.querySelector(".cmt_write_box");
+    if (!(writeBox instanceof HTMLElement)) return;
+
+    let isOpen = !!commentKey && moduleState.writeOpenKeys.has(commentKey);
+    // 등록 직후 다시 그려질 때: 글이 남아 있으면(등록 실패) 열어두고, 비었으면(성공) 닫는다
+    if (commentKey && moduleState.writeSubmitKeys.has(commentKey)) {
+      moduleState.writeSubmitKeys.delete(commentKey);
+      isOpen = hasWriteDraft(panel);
+      if (isOpen) moduleState.writeOpenKeys.add(commentKey);
+    }
+    panel.dataset.writeOpen = isOpen ? "true" : "false";
+
+    if (isOpen && commentKey && moduleState.focusWriteKey === commentKey) {
+      moduleState.focusWriteKey = "";
+      // 패널이 화면에 붙은 뒤에 커서를 준다
+      window.setTimeout(() => panel.querySelector(".cmt_write_box textarea")?.focus(), 0);
+    }
+  }
+
+  // 연필 버튼: 버튼 줄 왼쪽 구석
+  function addWriteToggleButton(panel) {
+    const actionBox = panel.querySelector(":scope > .dcmv-dc-comment-action-box");
+    if (!(actionBox instanceof HTMLElement)) return;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "dcmv-dc-comment-icon-btn dcmv-dc-comment-write-btn";
+    button.innerHTML = createIconSvg("pencil");
+    actionBox.prepend(button);
+    syncWriteToggleButton(panel);
+  }
+
+  function syncWriteToggleButton(panel) {
+    const button = panel.querySelector(".dcmv-dc-comment-write-btn");
+    if (!(button instanceof HTMLButtonElement)) return;
+
+    const isOpen = panel.dataset.writeOpen === "true";
+    button.title = isOpen ? "댓글 쓰기 닫기" : "댓글 쓰기";
+    button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  }
+
+  function hasWriteDraft(panel) {
+    const textarea = panel.querySelector(".cmt_write_box textarea");
+    return textarea instanceof HTMLTextAreaElement && textarea.value.trim() !== "";
+  }
+
+  function setWriteBoxOpen(panel, open) {
+    if (!(panel instanceof HTMLElement) || panel.dataset.writeOpen === undefined) return;
+
+    const nextValue = open ? "true" : "false";
+    if (panel.dataset.writeOpen === nextValue) return;
+    panel.dataset.writeOpen = nextValue;
+
+    const commentKey = panel.dataset.commentKey || "";
+    if (commentKey) {
+      if (open) {
+        moduleState.writeOpenKeys.add(commentKey);
+      } else {
+        moduleState.writeOpenKeys.delete(commentKey);
+      }
+    }
+
+    syncWriteToggleButton(panel);
+    updateCommentLayoutSize(panel.closest(".dcmv-dc-comment-layout"));
+  }
+
   function findMatchingSourceControl(panel, clonedControl) {
     const sourceRoot = getSourceCommentRoot(panel) || getSourceCommentRoot(panel, { preferExpanded: true });
     if (!(sourceRoot instanceof HTMLElement) || !(clonedControl instanceof HTMLElement)) {
@@ -887,6 +1030,43 @@
         return;
       }
 
+      // 항상 펼치기 버튼 클릭
+      const alwaysExpandBtn = target.closest(".dcmv-dc-comment-always-expand-btn");
+      if (alwaysExpandBtn instanceof HTMLButtonElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleAlwaysExpandComments();
+        return;
+      }
+
+      // 연필 버튼 클릭 → 작성란 열기/닫기 (닫아도 쓰던 글은 남아 있음)
+      const writeBtn = target.closest(".dcmv-dc-comment-write-btn");
+      if (writeBtn instanceof HTMLButtonElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        // 접힌 창에는 작성란이 없으므로, 펼치면서(더보기와 같음) 작성란을 열어둔다
+        if (panel.dataset.writeOpen === undefined) {
+          const { commentKey, hasExpandedRoot } = getPanelCommentContext(panel);
+          if (commentKey) {
+            moduleState.writeOpenKeys.add(commentKey);
+            moduleState.focusWriteKey = commentKey;
+          }
+          autoExpandedKeys.delete(commentKey);
+          setCommentCollapsedState(commentKey, false);
+          if (commentKey && hasExpandedRoot) {
+            requestCommentRefresh();
+          } else {
+            expandCollapsedComment(panel);
+          }
+          return;
+        }
+
+        const willOpen = panel.dataset.writeOpen !== "true";
+        setWriteBoxOpen(panel, willOpen);
+        if (willOpen) panel.querySelector(".cmt_write_box textarea")?.focus();
+        return;
+      }
+
       // 아래 화살표 버튼 클릭 (댓글창 아래로) - 전체 적용
       const downBtn = target.closest(".dcmv-dc-comment-move-down-btn");
       if (downBtn instanceof HTMLButtonElement) {
@@ -924,6 +1104,14 @@
           if (commentKey) {
             moduleState.emptyCommentStates.delete(commentKey);
             setCommentCollapsedState(commentKey, false);
+            // 항상 펼치기가 켜져 있으면 등록 뒤 다시 열린 창도 자동 펼침으로 본다.
+            // (수동 펼침으로 남으면 "마우스 올렸을 때만 보이기"를 무시하고 계속 보인다)
+            if (alwaysExpandComments) autoExpandedKeys.add(commentKey);
+            // 등록 후에는 작성란을 닫는다 (실패해서 글이 남아 있으면 열린 채로 유지됨)
+            if (sourceButton.classList.contains("btn_image_comment")) {
+              moduleState.writeOpenKeys.delete(commentKey);
+              moduleState.writeSubmitKeys.add(commentKey);
+            }
           }
           // btn_imgcmtopen 버튼을 'Y'로 변경 (이제 댓글 있다고 표시)
           const emptyBtn = panel.__dcmvEmptyCommentButton || findEmptyCommentOpenButton(panel.__dcmvSourceElement);
@@ -988,6 +1176,8 @@
           panel.dataset.commentExpanded = "false";
           requestCommentRefresh();
         } else {
+          // 직접 더보기로 연 건 수동 펼침으로 취급 (숨김 모드에서도 항상 보임)
+          autoExpandedKeys.delete(commentKey);
           if (commentKey && hasExpandedRoot) {
             setCommentCollapsedState(commentKey, false);
             panel.dataset.commentExpanded = "true";
@@ -1081,6 +1271,13 @@
   justify-content: center;
   width: fit-content;
   max-width: 100%;
+}
+
+/* 펼친 댓글의 강제 표시 스타일이 있어도 준비 중인 이미지와 댓글은 함께 숨긴다.
+   크기 계산은 유지하고, 페이지 교체 시 대기 표시가 해제되면 함께 나타난다. */
+.dcmv-page-wrap[data-dcmv-pending="1"] .dcmv-dc-comment-layout {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 .dcmv-dc-comment-layout > .dcmv-image-render-box {
@@ -1299,41 +1496,31 @@
   background: transparent;
 }
 
-.dcmv-dc-comment-panel.dcmv-dc-comment-panel-empty .dcmv-dc-comment-more-icon,
-.dcmv-dc-comment-panel.dcmv-dc-comment-panel-collapsed-empty .dcmv-dc-comment-more-icon {
-  width: 20px;
-  height: 16px;
-}
-
-.dcmv-dc-comment-panel.dcmv-dc-comment-panel-empty .dcmv-dc-comment-more-icon::after,
-.dcmv-dc-comment-panel.dcmv-dc-comment-panel-collapsed-empty .dcmv-dc-comment-more-icon::after {
-  left: 3px;
-  bottom: -5px;
-  width: 6px;
-  height: 6px;
-}
-
-.dcmv-dc-comment-panel-original .dcmv-dc-comment-more-icon,
-.dcmv-dc-comment-panel.dcmv-dc-comment-panel-empty .dcmv-dc-comment-more-icon,
-.dcmv-dc-comment-panel.dcmv-dc-comment-panel-collapsed-empty .dcmv-dc-comment-more-icon {
-  display: block;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 14px;
-  height: 11px;
-  transform: translate(-50%, -50%);
-  border: 1.5px solid rgba(255, 255, 255, 0.92);
-  border-radius: 3px;
-  box-sizing: border-box;
-  background: transparent;
+.dcmv-dc-comment-panel-original .dcmv-dc-comment-more-icon {
+  display: flex;
+  align-items: center;
+  text-indent: 0;
   pointer-events: none;
 }
 
+/* 댓글 없는 이미지의 "댓글" 버튼은 이미지 위 가운데에 뜨므로 같은 그림을 조금 크게(24px 높이) */
 .dcmv-dc-comment-panel.dcmv-dc-comment-panel-empty .dcmv-dc-comment-more-icon,
 .dcmv-dc-comment-panel.dcmv-dc-comment-panel-collapsed-empty .dcmv-dc-comment-more-icon {
-  width: 20px;
-  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  text-indent: 0;
+  pointer-events: none;
+}
+
+.dcmv-dc-comment-panel.dcmv-dc-comment-panel-empty .dcmv-dc-comment-more-icon svg,
+.dcmv-dc-comment-panel.dcmv-dc-comment-panel-collapsed-empty .dcmv-dc-comment-more-icon svg {
+  width: auto;
+  height: 24px;
 }
 
 .dcmv-dc-comment-panel.dcmv-dc-comment-panel-empty .dcmv-dc-comment-more-icon,
@@ -1345,17 +1532,7 @@
 .dcmv-dc-comment-panel-original .dcmv-dc-comment-more-icon::after,
 .dcmv-dc-comment-panel.dcmv-dc-comment-panel-empty .dcmv-dc-comment-more-icon::after,
 .dcmv-dc-comment-panel.dcmv-dc-comment-panel-collapsed-empty .dcmv-dc-comment-more-icon::after {
-  content: "";
-  position: absolute;
-  left: 2px;
-  bottom: -4px;
-  width: 5px;
-  height: 5px;
-  border-left: 1.5px solid rgba(255, 255, 255, 0.92);
-  border-bottom: 1.5px solid rgba(255, 255, 255, 0.92);
-  background: transparent;
-  transform: skewY(-25deg);
-  box-sizing: border-box;
+  content: none;
 }
 
 .dcmv-dc-comment-panel.dcmv-dc-comment-panel-empty:hover .dcmv-dc-comment-more-icon,
@@ -1441,22 +1618,24 @@
 
 .dcmv-dc-comment-panel-original .dcmv-dc-comment-action-box {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 6px;
   padding: 8px 10px 10px;
 }
 
 .dcmv-dc-comment-panel-original .dcmv-dc-comment-more-btn {
   width: auto;
-  height: 20px;
-  min-width: 20px;
+  height: 24px;
+  min-width: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: 4px;
   background: transparent;
   color: transparent !important;
   font-size: 0 !important;
   line-height: 0 !important;
   text-indent: -9999px;
-  padding: 0 6px 0 20px;
+  padding: 0 4px;
   cursor: pointer;
   position: relative;
   white-space: nowrap;
@@ -1569,6 +1748,51 @@
   padding-right: 0 !important;
 }
 
+/* 비로그인 댓글의 삭제(X) 버튼: 시간 오른쪽에 있으면 시간이 19px 밀려나서 왼쪽으로 옮긴다.
+   어두운 바탕에서 안 보이던 회색 그림은 밝게, 그 댓글에 마우스를 올렸을 때만 보이게 */
+.dcmv-dc-comment-panel-original .cmt_info .fr {
+  display: flex !important;
+  align-items: center;
+}
+
+.dcmv-dc-comment-panel-original .cmt_info .fr .cmt_mdf_del {
+  order: -1;
+  float: none !important;
+  margin: 0 6px 0 0 !important;
+  visibility: hidden;
+}
+
+.dcmv-dc-comment-panel-original .cmt_list > li:hover .cmt_mdf_del {
+  visibility: visible;
+}
+
+.dcmv-dc-comment-panel-original .cmt_mdf_del .btn_cmt_delete {
+  filter: brightness(0) invert(1);
+  opacity: 0.55;
+}
+
+.dcmv-dc-comment-panel-original .cmt_mdf_del .btn_cmt_delete:hover {
+  opacity: 0.9;
+}
+
+/* 댓글 본문 글자 크기 고정: 디시의 13px 규칙은 comment_wrap 안에서만 걸려서,
+   접힌 창(미리보기 목록만 복사)에서는 12px로 작아지던 문제 */
+.dcmv-dc-comment-panel-original .cmt_txtbox .usertxt {
+  font-size: 13px !important;
+}
+
+/* 닉네임 칸이 13px로 잘려 아랫부분이 흐려 보이던 문제: 높이만 15px로 */
+.dcmv-dc-comment-panel-original .cmt_nickbox,
+.dcmv-dc-comment-panel-original .cmt_nickbox .nickname {
+  height: 15px !important;
+  line-height: 15px !important;
+}
+
+/* 페이지 번호가 없으면(댓글 1페이지뿐) 빈 페이지 영역과 그 위 구분선을 숨긴다 */
+.dcmv-dc-comment-panel-original .bottom_paging_box:not(:has(.cmt_paging > *)) {
+  display: none !important;
+}
+
 .dcmv-dc-comment-panel-original .cmt_paging {
   display: flex !important;
   flex-wrap: wrap;
@@ -1606,6 +1830,16 @@
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+}
+
+/* 작성란 접기: 평소엔 숨기고 연필 버튼으로 연다 */
+.dcmv-dc-comment-panel[data-write-open="false"] .cmt_write_box {
+  display: none !important;
+}
+
+/* 연필 버튼은 버튼 줄 왼쪽 구석에 */
+.dcmv-dc-comment-action-box .dcmv-dc-comment-write-btn {
+  margin-right: auto;
 }
 
 .dcmv-dc-comment-panel-original .cmt_write_box,
@@ -1739,16 +1973,19 @@
   }
 }
 
-/* 눈 아이콘 버튼 */
-.dcmv-dc-comment-eye-btn {
+/* 댓글창 아이콘 버튼 공통: 같은 높이·밝기·마우스 반응
+   폭은 그림 폭 + 좌우 여백 4px라서, 그림 사이 거리가 아이콘 모양과 상관없이 항상 같다 */
+.dcmv-dc-comment-icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 20px;
-  padding: 0;
-  margin-right: 4px;
+  width: auto;
+  height: 24px;
+  min-width: 0;
+  padding: 0 4px;
+  margin: 0;
   border: 0;
+  border-radius: 4px;
   background: transparent;
   cursor: pointer;
   flex-shrink: 0;
@@ -1757,8 +1994,13 @@
   transition: opacity 0.14s ease;
 }
 
-.dcmv-dc-comment-eye-btn:hover {
+.dcmv-dc-comment-icon-btn:hover {
   opacity: 1;
+}
+
+/* 누르는 순간 살짝 어둡게 */
+.dcmv-dc-comment-icon-btn:active {
+  opacity: 0.5;
 }
 
 /* hover 모드: data-comment-visible="false" 이면 내부 콘텐츠만 숨김, 패널 배경은 유지 */
@@ -1778,9 +2020,11 @@
   transition: opacity 0.12s ease, visibility 0.12s ease;
 }
 
-/* 더보기 상태일 때는 hover 모드에서도 항상 표시 */
-.dcmv-dc-comment-panel[data-comment-expanded="true"],
-.dcmv-dc-comment-panel[data-comment-expanded="true"] > * {
+/* 더보기 상태일 때는 hover 모드에서도 항상 표시
+   (자동 펼치기로 열린 건 제외, 입력 중일 때는 항상 표시) */
+.dcmv-dc-comment-panel[data-comment-expanded="true"]:not([data-auto-expanded="true"]),
+.dcmv-dc-comment-panel[data-comment-expanded="true"]:not([data-auto-expanded="true"]) > *,
+.dcmv-dc-comment-panel:has(textarea:focus, input:focus) > * {
   opacity: 1 !important;
   visibility: visible !important;
   pointer-events: auto !important;
@@ -1801,32 +2045,18 @@
 .dcmv-dc-comment-layout[data-comment-placement="below"] .dcmv-dc-comment-action-box {
   display: none;
 }
-/* 아래 화살표 버튼 (action-box 내) */
-.dcmv-dc-comment-move-down-btn {
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  margin-right: 4px;
-}
 
-/* 위 화살표 버튼 (below 패널 우측 하단) */
+/* 위 화살표 버튼 (below 패널 우측 하단)
+   크기·밝기 규칙은 다른 아이콘 버튼과 같고, 글 위에 겹치므로 어두운 바탕만 깔아둔다 */
 .dcmv-dc-comment-move-up-btn {
   position: absolute;
   right: 6px;
   bottom: 6px;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border: 0;
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0);
-  color: rgba(255, 255, 255, 0);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
   cursor: pointer;
   display: none;
   align-items: center;
@@ -1834,21 +2064,23 @@
   padding: 0;
   z-index: 10;
   opacity: 0;
-  transition: opacity 0.2s ease, background 0.2s ease;
+  transition: opacity 0.14s ease;
 }
 
-.dcmv-dc-comment-move-up-btn:hover {
-  background: rgba(0, 0, 0, 0.5);
-  color: rgba(255, 255, 255, 0.92);
-  opacity: 1;
-}
-
-/* below 패널 아무데나 마우스 올리면 화살표 보임 */
+/* below 패널 아무데나 마우스 올리면 화살표 보임 → 버튼에 올리면 더 밝게 → 누르면 살짝 어둡게 */
 .dcmv-dc-comment-panel-below-preview:hover .dcmv-dc-comment-move-up-btn,
 .dcmv-dc-comment-panel:hover .dcmv-dc-comment-move-up-btn {
+  opacity: 0.72;
+}
+
+.dcmv-dc-comment-panel-below-preview:hover .dcmv-dc-comment-move-up-btn:hover,
+.dcmv-dc-comment-panel:hover .dcmv-dc-comment-move-up-btn:hover {
   opacity: 1;
-  background: rgba(0, 0, 0, 0.5);
-  color: rgba(255, 255, 255, 0.92);
+}
+
+.dcmv-dc-comment-panel-below-preview:hover .dcmv-dc-comment-move-up-btn:active,
+.dcmv-dc-comment-panel:hover .dcmv-dc-comment-move-up-btn:active {
+  opacity: 0.5;
 }
 
 /* 전역 forceBelowMode가 켜져있을 때만 위 화살표 표시 (사용자가 강제로 아래로 내린 경우에만) */
@@ -1896,7 +2128,7 @@
       // 아래 화살표 버튼 (댓글창 아래로)
       const downBtn = document.createElement("button");
       downBtn.type = "button";
-      downBtn.className = "dcmv-dc-comment-move-down-btn";
+      downBtn.className = "dcmv-dc-comment-icon-btn dcmv-dc-comment-move-down-btn";
       downBtn.title = "댓글창 아래로 내리기";
       downBtn.innerHTML = createDownArrowIconSvg();
       actionBox.appendChild(downBtn);
@@ -1904,18 +2136,26 @@
       // 눈 아이콘 버튼
       const eyeBtn = document.createElement("button");
       eyeBtn.type = "button";
-      eyeBtn.className = "dcmv-dc-comment-eye-btn";
+      eyeBtn.className = "dcmv-dc-comment-icon-btn dcmv-dc-comment-eye-btn";
       eyeBtn.title = alwaysShowComments ? "마우스 올려야 표시로 전환" : "항상 표시로 전환";
       eyeBtn.innerHTML = createEyeIconSvg(!alwaysShowComments);
       actionBox.appendChild(eyeBtn);
+
+      // 항상 펼치기 버튼
+      const alwaysExpandBtn = document.createElement("button");
+      alwaysExpandBtn.type = "button";
+      alwaysExpandBtn.className = "dcmv-dc-comment-icon-btn dcmv-dc-comment-always-expand-btn";
+      applyAlwaysExpandButtonState(alwaysExpandBtn);
+      actionBox.appendChild(alwaysExpandBtn);
     }
 
     const moreButton = document.createElement("button");
     moreButton.type = "button";
-    moreButton.className = "dcmv-dc-comment-more-btn";
+    moreButton.className = "dcmv-dc-comment-icon-btn dcmv-dc-comment-more-btn";
 
     const moreIcon = document.createElement("span");
     moreIcon.className = "dcmv-dc-comment-more-icon";
+    moreIcon.innerHTML = createCommentBubbleIconSvg();
     moreButton.appendChild(moreIcon);
 
     actionBox.appendChild(moreButton);
@@ -2024,12 +2264,190 @@
     // 위 화살표 버튼 (댓글창 위로 - 사용자 강제 below 모드에서만 표시)
     const upBtn = document.createElement("button");
     upBtn.type = "button";
-    upBtn.className = "dcmv-dc-comment-move-up-btn";
+    upBtn.className = "dcmv-dc-comment-icon-btn dcmv-dc-comment-move-up-btn";
     upBtn.title = "댓글창 위로 올리기";
     upBtn.innerHTML = createUpArrowIconSvg();
     panel.appendChild(upBtn);
 
     return panel;
+  }
+
+  function applyAlwaysExpandButtonState(button) {
+    button.innerHTML = createAlwaysExpandIconSvg(!alwaysExpandComments);
+    button.title = alwaysExpandComments ? "댓글 항상 펼치기" : "댓글 항상 접기";
+    button.setAttribute("aria-pressed", alwaysExpandComments ? "true" : "false");
+  }
+
+  function syncAlwaysExpandButtons() {
+    document
+      .querySelectorAll(".dcmv-dc-comment-always-expand-btn")
+      .forEach((btn) => applyAlwaysExpandButtonState(btn));
+  }
+
+  function toggleAlwaysExpandComments() {
+    alwaysExpandComments = !alwaysExpandComments;
+    if (typeof saveAlwaysExpandCommentsCallback === "function") {
+      saveAlwaysExpandCommentsCallback(alwaysExpandComments);
+    }
+    syncAlwaysExpandButtons();
+    if (!alwaysExpandComments) {
+      // 끄면 전부 접어서, 켜고 끈 차이가 바로 보이게 한다 (다시 켜면 요청 없이 그대로 펼쳐짐)
+      collapseAllExpandedComments();
+      requestCommentRefresh();
+      return;
+    }
+
+    // 버튼으로 켤 때는 직접 접어둔 것과 이전 실패 기록도 비우고 전부 다시 펼친다
+    moduleState.collapsedCommentKeys.clear();
+    autoExpandTries.clear();
+    requestCommentRefresh();
+    scheduleAutoExpandAll(0);
+  }
+
+  function scheduleAutoExpandAll(delay = 150) {
+    if (!alwaysExpandComments) return;
+    window.clearTimeout(autoExpandRun.timer);
+    autoExpandRun.timer = window.setTimeout(runAutoExpandAll, delay);
+  }
+
+  function getImageAreaCommentKey(imageArea) {
+    const imageElement =
+      imageArea.querySelector(".imgwrap img") || imageArea.querySelector("img");
+    return getCommentSourceKey(imageElement);
+  }
+
+  // 펼쳐진 댓글창을 전부 접는다 ("접기"를 누른 것과 같음, "더보기"로 직접 연 것도 포함)
+  function collapseAllExpandedComments() {
+    document.querySelectorAll(".img_area").forEach((imageArea) => {
+      if (imageArea.closest(".dcmv-dc-comment-panel")) return;
+      if (!findExpandedCommentRoot(imageArea)) return;
+      // 댓글 없는 이미지에서 첫 댓글을 쓰려고 연 창은 건드리지 않는다
+      if (findEmptyCommentOpenButton(imageArea.querySelector("img"))) return;
+
+      const commentKey = getImageAreaCommentKey(imageArea);
+      if (commentKey) setCommentCollapsedState(commentKey, true);
+    });
+  }
+
+  // 자동으로 펼칠 대상: 접힌 댓글이 있고, 사용자가 직접 접지 않았고, 시도 횟수가 남은 이미지
+  function collectAutoExpandTargets() {
+    const targets = [];
+    document.querySelectorAll(".img_area").forEach((imageArea) => {
+      // 뷰어 댓글창 안의 복제본은 제외
+      if (imageArea.closest(".dcmv-dc-comment-panel")) return;
+      if (findExpandedCommentRoot(imageArea)) return;
+
+      const commentRoot = imageArea.querySelector(".img_comment.getMoreComment:not(.open)");
+      if (!isSelectableCommentRoot(commentRoot)) return;
+
+      const commentKey = getImageAreaCommentKey(imageArea);
+      if (commentKey && moduleState.collapsedCommentKeys.has(commentKey)) return;
+
+      const triesKey = commentKey || commentRoot;
+      if ((autoExpandTries.get(triesKey) || 0) >= AUTO_EXPAND_MAX_TRIES) return;
+
+      targets.push({ imageArea, commentRoot, commentKey, triesKey });
+    });
+    return targets;
+  }
+
+  function clickOriginalFoldExpand({ commentRoot, triesKey }) {
+    autoExpandTries.set(triesKey, (autoExpandTries.get(triesKey) || 0) + 1);
+    const trigger = commentRoot.querySelector("li:last-child .cmt_txtbox") || commentRoot;
+
+    try {
+      if (typeof globalRoot.jQuery === "function") {
+        globalRoot.jQuery(trigger).trigger("click");
+      } else {
+        trigger.click();
+      }
+    } catch {
+      // 클릭이 실패하면 다음 시도에서 다시 해본다
+    }
+  }
+
+  function waitForCommentsExpanded(imageAreas, timeoutMs) {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      const check = () => {
+        const allExpanded = imageAreas.every((area) => !!findExpandedCommentRoot(area));
+        if (allExpanded || Date.now() - startedAt >= timeoutMs) {
+          resolve();
+          return;
+        }
+        window.setTimeout(check, 100);
+      };
+      check();
+    });
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function runAutoExpandAll() {
+    if (!alwaysExpandComments) return;
+    if (autoExpandRun.running) {
+      autoExpandRun.rerun = true;
+      return;
+    }
+
+    autoExpandRun.running = true;
+    let expandedAny = false;
+    let isFirstBatch = true;
+    let lastBatchFailed = false;
+
+    try {
+      // 1회차는 전부, 2회차는 동시에 보내다 빠진 것만 다시 시도
+      for (let round = 0; round < AUTO_EXPAND_MAX_TRIES; round++) {
+        const targets = collectAutoExpandTargets();
+        if (!targets.length) break;
+
+        for (let i = 0; i < targets.length; i += AUTO_EXPAND_BATCH_SIZE) {
+          // 묶음 사이에 쉬고, 직전 묶음에 실패가 있었으면 더 쉰다
+          if (!isFirstBatch) {
+            await sleep(
+              AUTO_EXPAND_BATCH_GAP_MS + (lastBatchFailed ? AUTO_EXPAND_FAIL_EXTRA_GAP_MS : 0)
+            );
+          }
+          isFirstBatch = false;
+          lastBatchFailed = false;
+          if (!alwaysExpandComments) return;
+
+          const batch = targets.slice(i, i + AUTO_EXPAND_BATCH_SIZE);
+          batch.forEach(clickOriginalFoldExpand);
+          await waitForCommentsExpanded(
+            batch.map((target) => target.imageArea),
+            AUTO_EXPAND_WAIT_MS
+          );
+
+          batch.forEach(({ imageArea, commentKey, triesKey }) => {
+            if (findExpandedCommentRoot(imageArea)) {
+              // 성공한 건 기록을 지워서, 나중에 디시가 다시 접어도 또 펼칠 수 있게 한다
+              autoExpandTries.delete(triesKey);
+              if (commentKey) autoExpandedKeys.add(commentKey);
+              expandedAny = true;
+            } else {
+              lastBatchFailed = true;
+            }
+          });
+        }
+      }
+    } finally {
+      autoExpandRun.running = false;
+      if (!alwaysExpandComments) {
+        // 펼치는 도중에 꺼졌으면, 끈 뒤에 늦게 펼쳐진 것까지 다시 접는다
+        collapseAllExpandedComments();
+        requestCommentRefresh();
+      } else if (expandedAny) {
+        // 하나씩 펼칠 때마다가 아니라 다 끝난 뒤 화면을 한 번만 다시 그린다
+        requestCommentRefresh();
+      }
+      if (autoExpandRun.rerun) {
+        autoExpandRun.rerun = false;
+        scheduleAutoExpandAll();
+      }
+    }
   }
 
   function syncEyeButtons() {
@@ -2606,9 +3024,29 @@
       if (commentKey && moduleState.collapsedCommentKeys.has(commentKey)) {
         panel.dataset.commentExpanded = "false";
       }
+      // 항상 펼치기가 켜져 있는데 아직 접힌 댓글이 보이면 자동으로 펼친다
+      if (alwaysExpandComments && panel.dataset.commentExpanded !== "true") {
+        scheduleAutoExpandAll();
+      }
+      // 자동으로 펼친 댓글창은 눈 아이콘 숨김 모드를 따르도록 표시
+      if (
+        panel.dataset.commentExpanded === "true" &&
+        commentKey &&
+        autoExpandedKeys.has(commentKey)
+      ) {
+        panel.dataset.autoExpanded = "true";
+      }
       normalizeOriginalCommentWriteBox(panel);
+      // 댓글 없는 이미지에서 쓰려고 연 경우는 바로 쓸 수 있게 접지 않는다
+      if (!emptyCommentButton && !isEmptyCommentMode(commentKey)) {
+        setupCompactWriteBox(panel, commentKey);
+      }
       // 댓글 있는 패널이므로 hasComments=true → 눈 아이콘 추가
       panel.appendChild(createCommentActionBox(true));
+      // 연필 버튼은 접힌 창에도 보인다 (댓글 없는 이미지의 첫 댓글 창은 작성란이 이미 열려 있어 제외)
+      if (!emptyCommentButton && !isEmptyCommentMode(commentKey)) {
+        addWriteToggleButton(panel);
+      }
       updateCommentActionButton(panel);
       if (isEmptyCommentMode(commentKey) && isEmptyCommentHidden(commentKey)) {
         setEmptyCommentPanelExpanded(panel, false);
@@ -2688,7 +3126,9 @@
     setForceBelowMode,
     setSaveForceBelowModeCallback,
     isForceBelowMode,
-    applyForceBelowModeToAllLayouts
+    applyForceBelowModeToAllLayouts,
+    setAlwaysExpandComments,
+    setSaveAlwaysExpandCommentsCallback
   };
   modules.dcinsideComments = globalRoot.__dcmvDcinsideComments;
 })();

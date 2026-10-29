@@ -372,7 +372,7 @@
           chrome.runtime?.sendMessage?.({ type: "DCMV_OPEN_OPTIONS" });
         } else if (action === "split-long-images") {
           actionEl.blur();
-          deps.setLongImageSplitActive?.(true, { advance: true }).catch(() => {});
+          deps.setLongImageSplitActive?.(true).catch(() => {});
         } else if (action === "clear-long-image-split") {
           actionEl.blur();
           deps.setLongImageSplitActive?.(false).catch(() => {});
@@ -421,6 +421,61 @@
 
         deps.goPrev(true);
       };
+
+      // 분수 칸: 누르면 숫자가 전체 선택돼 바로 새 숫자를 칠 수 있다.
+      // Enter를 치면 바로 그 숫자로 자른다. 칸 밖을 누르면 숫자만 확정되고,
+      // 이미 잘린 상태일 때만 그 숫자로 다시 자른다.
+      const splitCountInput = targetState.settingsLongImageSplitCountInput;
+      if (splitCountInput) {
+        // 마우스로 처음 누를 때는 mouseup이 전체 선택을 풀어버려서 한 번 막아준다.
+        let keepSelectionOnMouseUp = false;
+        splitCountInput.addEventListener("mousedown", () => {
+          keepSelectionOnMouseUp = splitCountInput.ownerDocument.activeElement !== splitCountInput;
+        });
+        splitCountInput.addEventListener("mouseup", (e) => {
+          if (!keepSelectionOnMouseUp) return;
+          keepSelectionOnMouseUp = false;
+          e.preventDefault();
+        });
+        splitCountInput.addEventListener("focus", () => splitCountInput.select());
+        splitCountInput.addEventListener("input", () => {
+          const digits = splitCountInput.value.replace(/\D/g, "");
+          if (digits !== splitCountInput.value) splitCountInput.value = digits;
+        });
+        const commitSplitCount = (state) => {
+          const fallback = state.longImageSplitTargetCount || 2;
+          const nextCount =
+            modules.dcinsideLongImageSplit?.normalizeSplitPartCount?.(
+              splitCountInput.value,
+              fallback
+            ) ?? fallback;
+          state.longImageSplitTargetCount = nextCount;
+          splitCountInput.value = `${nextCount}`;
+          return nextCount;
+        };
+        // Enter로 확정할 때는 blur가 일으키는 change에서 따로 자르지 않게 막는다.
+        let isCommittingByEnter = false;
+        splitCountInput.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          const state = deps.getState();
+          if (!state) return;
+          commitSplitCount(state);
+          isCommittingByEnter = true;
+          splitCountInput.blur();
+          isCommittingByEnter = false;
+          // Enter는 자르기 버튼을 누른 것처럼 바로 그 숫자로 자른다.
+          deps.setLongImageSplitActive?.(true).catch(() => {});
+        });
+        splitCountInput.addEventListener("change", () => {
+          const state = deps.getState();
+          if (!state || isCommittingByEnter) return;
+          const nextCount = commitSplitCount(state);
+          if (state.longImageSplitActive && state.longImageSplitPartCount !== nextCount) {
+            deps.setLongImageSplitActive?.(true, { closeMenu: false }).catch(() => {});
+          }
+        });
+      }
 
       targetState.handlers = {
         escHandler,

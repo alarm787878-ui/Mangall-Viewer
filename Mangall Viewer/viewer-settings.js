@@ -11,6 +11,7 @@
     alwaysShowComments: true,
     autoFullscreen: false,
     forceBelowMode: false,
+    alwaysExpandComments: false,
     showCornerPageCounter: false,
     fullscreenShortcut: "f",
     spreadShortcut: "",
@@ -27,6 +28,7 @@
     "alwaysShowComments",
     "autoFullscreen",
     "forceBelowMode",
+    "alwaysExpandComments",
     "showCornerPageCounter"
   ];
   const TEXT_SETTING_FIELDS = [
@@ -68,6 +70,7 @@
             storageKeys.alwaysShowComments,
             storageKeys.autoFullscreen,
             storageKeys.forceBelowMode,
+            storageKeys.alwaysExpandComments,
             storageKeys.showCornerPageCounter,
             storageKeys.fullscreenShortcut,
             storageKeys.spreadShortcut,
@@ -224,20 +227,15 @@
         );
       }
       if (targetState.settingsLongImageSplitButton) {
-        const nextPartCount = deps.getNextLongImageSplitPartCount?.(targetState) || 0;
-        targetState.settingsLongImageSplitButton.querySelector(
-          ".dcmv-settings-item-label"
-        ).textContent = !targetState.longImageSplitActive
-          ? "긴 이미지 자르기"
-          : nextPartCount > 0
-            ? `긴 이미지 1/${nextPartCount}로 자르기`
-            : "더 이상 자를 수 없음";
-        targetState.settingsLongImageSplitButton.disabled =
-          !!targetState.longImageSplitActive && nextPartCount === 0;
         targetState.settingsLongImageSplitButton.setAttribute(
           "aria-pressed",
           targetState.longImageSplitActive ? "true" : "false"
         );
+      }
+      const splitCountInput = targetState.settingsLongImageSplitCountInput;
+      // 입력 중에는 칸 내용을 덮어쓰지 않는다.
+      if (splitCountInput && splitCountInput.ownerDocument.activeElement !== splitCountInput) {
+        splitCountInput.value = `${targetState.longImageSplitTargetCount || 2}`;
       }
       if (targetState.settingsLongImageSplitClearButton) {
         // 단면 재설정 되돌림 버튼처럼, 되돌릴 자르기가 있을 때만 보인다.

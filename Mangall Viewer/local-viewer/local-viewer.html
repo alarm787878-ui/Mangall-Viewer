@@ -9,6 +9,18 @@
   <link rel="stylesheet" href="local-viewer.css">
 </head>
 <body>
+  <div class="lv_layout">
+  <!-- 설정 페이지(extension-settings.html)의 좌측 메뉴와 똑같이 맞춘 메뉴.
+       주의: 설정 페이지 메뉴를 바꾸면 여기도 같이 바꿔야 한다. -->
+  <nav class="lv_sidebar" aria-label="설정 메뉴">
+    <div class="lv_sidebar_brand">Mangall Viewer</div>
+    <a class="lv_nav_btn" href="../extension-settings.html#site-access">사이트 액세스 설정</a>
+    <a class="lv_nav_btn is_active" href="local-viewer.html" aria-current="page">로컬 파일 보기</a>
+    <a class="lv_nav_btn" href="../extension-settings.html#shortcut-settings">단축키 설정</a>
+    <a class="lv_nav_btn" href="../extension-settings.html#update-info">업데이트 안내</a>
+    <a class="lv_nav_btn" href="../extension-settings.html#contact-info">문의</a>
+  </nav>
+
   <main class="lv_root">
     <header class="lv_hero">
       <div class="lv_hero_badge">Local Files</div>
@@ -39,6 +51,15 @@
       </div>
     </section>
 
+    <section id="lv_recent_panel" class="lv_panel lv_recent_panel" hidden>
+      <div class="lv_panel_header">
+        <h2 class="lv_panel_title">최근에 연 폴더</h2>
+        <button id="lv_recent_clear_btn" class="lv_text_btn" type="button">기록 지우기</button>
+      </div>
+      <ol id="lv_recent_list" class="lv_recent_list"></ol>
+      <button id="lv_recent_toggle_btn" class="lv_text_btn lv_recent_toggle" type="button" hidden></button>
+    </section>
+
     <section class="lv_panel lv_pages_panel">
       <div class="lv_panel_header">
         <h2 class="lv_panel_title">
@@ -50,6 +71,7 @@
       <div id="lv_page_list" class="lv_page_list is_empty"></div>
     </section>
   </main>
+  </div>
 
   <!-- 뷰어가 이미지를 찾는 기준 위치. 로컬 어댑터가 목록을 직접 넘겨주므로 비어 있다. -->
   <div id="lv_source_root" hidden></div>

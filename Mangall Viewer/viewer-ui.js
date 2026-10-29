@@ -2,15 +2,19 @@
   const modules = (globalThis.__dcmvModules = globalThis.__dcmvModules || {});
   // 뷰어를 열었을 때 화면 오른쪽 아래에 한 번 띄우는 안내 말풍선 설정.
   // 다음 안내를 띄우고 싶으면 이 안의 값만 바꾸면 된다.
+  // 띄울지 판단·"봤음" 기록은 content.js가 한다 (showPendingViewerNotice).
+  //   - 말풍선이 닫히면 chrome.storage.local의 "settingsUpdateNoticeSeenKey"에 아래 id를 저장한다.
+  //   - 테스트로 다시 보려면 설정 페이지에서 F12 → 콘솔에 입력:
+  //     chrome.storage.local.remove("settingsUpdateNoticeSeenKey")
   const VIEWER_NOTICE = {
     // 안내의 이름. 이 값을 새로 바꾸면 예전 안내를 본 사람에게도 다시 한 번 뜬다.
-    id: "update-1.7.1",
+    id: "update-1.7.2",
     // 이 버전에서만 띄운다. 빈 글자("")로 두면 버전과 상관없이 띄운다.
-    onlyVersion: "1.7.1",
+    onlyVersion: "1.7.2",
     // 맨 위 가운데에 굵게 보이는 제목. 빈 글자("")면 제목 줄이 없다.
-    title: "업데이트",
+    title: "",
     // 제목 밑에 점(•)을 붙여 한 줄씩 보여줄 항목들. 필요 없으면 빈 목록([])으로 둔다.
-    items: ["PgDn, PgUp 으로 페이지 이동", "로컬 파일도 뷰어 지원"],
+    items: [],
     // 항목 대신(또는 항목 위에) 그냥 문장으로 보여줄 문구. \n 자리에서 줄이 바뀐다.
     // 제목·항목·문구가 모두 비어 있으면 안내를 띄우지 않는다.
     message: "",
@@ -300,7 +304,28 @@
       longImageSplitClearButton.title = "긴 이미지 자르기 해제";
       longImageSplitClearButton.hidden = true;
       longImageSplitClearButton.appendChild(manualResetClearIcon());
-      longImageSplitWrap.append(longImageSplitButton, longImageSplitClearButton);
+      // 분수의 아래 숫자만 고칠 수 있게 "1/"은 글자로 두고 숫자 칸만 입력으로 만든다.
+      const longImageSplitFraction = el("label", "dcmv-settings-long-image-split-fraction");
+      longImageSplitFraction.title = "몇 조각으로 자를지 정하기";
+      const longImageSplitCountInput = el(
+        "input",
+        "dcmv-settings-long-image-split-count-input"
+      );
+      longImageSplitCountInput.type = "text";
+      longImageSplitCountInput.inputMode = "numeric";
+      longImageSplitCountInput.maxLength = 2;
+      longImageSplitCountInput.value = "2";
+      longImageSplitCountInput.setAttribute("aria-label", "긴 이미지를 나눌 조각 수");
+      longImageSplitFraction.append(
+        el("span", "dcmv-settings-long-image-split-numerator", "1/"),
+        longImageSplitCountInput
+      );
+      // 버튼 안에 넣으면 칸을 누를 때 자르기가 실행되므로 버튼 옆에 둔다.
+      longImageSplitWrap.append(
+        longImageSplitButton,
+        longImageSplitFraction,
+        longImageSplitClearButton
+      );
       const manualPairingResetButton = el(
         "div",
         "dcmv-settings-item dcmv-settings-item-split dcmv-settings-manual-reset-wrap"

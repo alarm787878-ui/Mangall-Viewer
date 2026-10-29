@@ -10,6 +10,11 @@
   // 탭 임시 저장소(sessionStorage)라서 이 탭을 닫거나 브라우저를 끄면 사라진다. (새로고침은 유지)
   const READ_POSITIONS_STORAGE_KEY = "dcmv-local-read-positions";
   const MAX_SAVED_READ_POSITIONS = 200;
+  // 최근에 연 폴더 목록. 위와 달리 계속 남는 저장소(localStorage)라 브라우저를 꺼도 유지된다.
+  const RECENT_BOOKS_STORAGE_KEY = "dcmv-local-recent-books";
+  const MAX_RECENT_BOOKS = 20;
+  // 접힌 상태에서 보여 줄 개수. 나머지는 "펼치기"를 눌러야 보인다.
+  const RECENT_BOOKS_COLLAPSED_COUNT = 5;
   const BOOK_QUERY_NAME = "book";
   const DEFAULT_DOCUMENT_TITLE = document.title;
 
@@ -29,6 +34,11 @@
   const pageList = document.getElementById("lv_page_list");
   const dropOverlay = document.getElementById("lv_drop_overlay");
   const floatingToast = document.getElementById("lv_toast");
+  const recentPanel = document.getElementById("lv_recent_panel");
+  const recentList = document.getElementById("lv_recent_list");
+  const recentClearBtn = document.getElementById("lv_recent_clear_btn");
+  const recentToggleBtn = document.getElementById("lv_recent_toggle_btn");
+  let isRecentExpanded = false;
 
   const pathCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -179,6 +189,149 @@
     });
   }
 
+  // ───────── 최근에 연 폴더 ─────────
+
+  function readRecentBooks() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(RECENT_BOOKS_STORAGE_KEY) || "[]");
+      return Array.isArray(parsed) ? parsed.filter((entry) => entry && entry.id) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function writeRecentBooks(entries) {
+    try {
+      localStorage.setItem(RECENT_BOOKS_STORAGE_KEY, JSON.stringify(entries));
+    } catch {
+    }
+  }
+
+  // "작품/20화/015.jpg" → "작품 / 20화" (파일 이름을 뺀 폴더 부분)
+  function getPageFolderLabel(page) {
+    const parts = String(page?.name || "").split("/");
+    parts.pop();
+    return parts.join(" / ");
+  }
+
+  function formatRecentTime(time) {
+    const date = new Date(Number(time) || 0);
+    if (!Number(time) || Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString("ko-KR", {
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  }
+
+  // index를 모르면(막 불러온 직후) 예전에 적어 둔 "마지막으로 본 곳"을 그대로 둔다.
+  function recordRecentBook(index = null) {
+    if (!book.id || !book.pages.length) return;
+
+    const entries = readRecentBooks();
+    // 목록은 이름으로 묶는다. (안의 이미지만 고친 같은 폴더가 두 줄로 남지 않게)
+    // 단, "마지막으로 본 곳"은 파일 묶음까지 같을 때만 이어받는다.
+    const isSameName = (entry) => (entry.title || entry.id) === (book.title || book.id);
+    const previous = entries.find((entry) => entry.id === book.id);
+    const entry = {
+      id: book.id,
+      title: book.title,
+      folder: previous?.folder || getPageFolderLabel(book.pages[0]),
+      page: previous?.page || 1,
+      total: book.pages.length,
+      openedAt: Date.now()
+    };
+
+    if (Number.isInteger(index)) {
+      const safeIndex = Math.min(Math.max(index, 0), book.pages.length - 1);
+      entry.folder = getPageFolderLabel(book.pages[safeIndex]);
+      entry.page = safeIndex + 1;
+    }
+
+    const nextEntries = [entry, ...entries.filter((item) => !isSameName(item))];
+    writeRecentBooks(nextEntries.slice(0, MAX_RECENT_BOOKS));
+    renderRecentBooks();
+  }
+
+  function renderRecentBooks() {
+    if (!recentPanel || !recentList) return;
+
+    const entries = readRecentBooks();
+    recentPanel.hidden = !entries.length;
+    recentList.textContent = "";
+
+    const hiddenCount = Math.max(0, entries.length - RECENT_BOOKS_COLLAPSED_COUNT);
+    if (recentToggleBtn) {
+      recentToggleBtn.hidden = !hiddenCount;
+      recentToggleBtn.textContent = isRecentExpanded ? "접기" : `펼치기 (${hiddenCount}개 더)`;
+    }
+    const visibleEntries = isRecentExpanded
+      ? entries
+      : entries.slice(0, RECENT_BOOKS_COLLAPSED_COUNT);
+
+    for (const entry of visibleEntries) {
+      const item = document.createElement("li");
+      item.className = "lv_recent_item";
+
+      const name = document.createElement("div");
+      name.className = "lv_recent_name";
+
+      const title = document.createElement("div");
+      title.className = "lv_recent_title";
+      title.textContent = entry.title || entry.folder || "이름 없음";
+      name.appendChild(title);
+
+      const detailParts = [];
+      if (entry.folder && entry.folder !== entry.title) {
+        detailParts.push(`마지막으로 본 곳: ${entry.folder}`);
+      }
+      if (entry.page && entry.total) {
+        detailParts.push(`${entry.page} / ${entry.total}장`);
+      }
+      if (detailParts.length) {
+        const detail = document.createElement("div");
+        detail.className = "lv_recent_detail";
+        detail.textContent = detailParts.join(" · ");
+        name.appendChild(detail);
+      }
+
+      const time = document.createElement("span");
+      time.className = "lv_recent_time";
+      time.textContent = formatRecentTime(entry.openedAt);
+
+      // 시간 + 개별 삭제(x) 버튼을 한 묶음으로 둔다.
+      const side = document.createElement("div");
+      side.className = "lv_recent_side";
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "lv_recent_remove";
+      removeBtn.textContent = "×";
+      removeBtn.title = "이 기록만 지우기";
+      removeBtn.setAttribute("aria-label", "이 기록만 지우기");
+      removeBtn.addEventListener("click", () => removeRecentBook(entry));
+      side.append(time, removeBtn);
+
+      item.append(name, side);
+      recentList.appendChild(item);
+    }
+  }
+
+  // 목록은 이름으로 묶여 있으니(recordRecentBook 참고) 같은 이름의 기록을 함께 지운다.
+  function removeRecentBook(target) {
+    const nameOf = (entry) => entry.title || entry.id;
+    writeRecentBooks(readRecentBooks().filter((entry) => nameOf(entry) !== nameOf(target)));
+    renderRecentBooks();
+  }
+
+  function clearRecentBooks() {
+    try {
+      localStorage.removeItem(RECENT_BOOKS_STORAGE_KEY);
+    } catch {
+    }
+    renderRecentBooks();
+  }
+
   // ───────── 만화별 읽던 위치 ─────────
 
   function readSavedPositions() {
@@ -232,6 +385,7 @@
         });
     }
     writeSavedPositions(positions);
+    recordRecentBook(index);
   }
 
   // 뷰어를 열기 직전에, 저장해 둔 위치를 뷰어가 읽는 자리에 넣어 둔다.
@@ -487,6 +641,7 @@
       book.id = createBookId(items);
       book.title = createBookTitle(items);
       renderBook();
+      recordRecentBook();
 
       if (archiveErrors.length) {
         setStatus(`${pages.length}장을 불러왔습니다. 일부 ZIP은 읽지 못했습니다: ${archiveErrors[0]}`, "error");
@@ -627,9 +782,35 @@
     void openViewerForCurrentBook();
   });
   clearBtn?.addEventListener("click", clearBook);
+  recentClearBtn?.addEventListener("click", clearRecentBooks);
+  recentToggleBtn?.addEventListener("click", () => {
+    isRecentExpanded = !isRecentExpanded;
+    renderRecentBooks();
+  });
+
+  // 툴바 아이콘·Ctrl+Shift+E: background.js가 이 탭 번호를 담아 보낸다.
+  // 로컬 뷰어 탭이 여러 개일 수 있으므로 내 탭으로 온 신호만 처리한다.
+  let myTabId = null;
+  chrome.tabs?.getCurrent?.((tab) => {
+    myTabId = tab?.id ?? null;
+  });
+  chrome.runtime?.onMessage?.addListener((message) => {
+    if (message?.type !== "DCMV_LOCAL_VIEWER_TOGGLE") return;
+    if (myTabId === null || message.tabId !== myTabId) return;
+
+    if (isViewerOpen()) {
+      closeViewerIfOpen();
+    } else {
+      void openViewerForCurrentBook();
+    }
+  });
 
   // 탭을 닫거나 새로고침할 때도 마지막 위치를 남긴다.
   window.addEventListener("pagehide", rememberViewerPosition);
+  // 브라우저를 통째로 끌 때는 pagehide가 안 올 수 있어, 화면이 가려지는 순간에도 남긴다.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") rememberViewerPosition();
+  });
   window.addEventListener("pagehide", () => revokePageUrls(book.pages));
 
   // ───────── 시작 ─────────
@@ -644,5 +825,6 @@
 
   watchViewerOverlay();
   renderBook();
+  renderRecentBooks();
   syncButtonState();
 })();

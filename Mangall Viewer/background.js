@@ -211,6 +211,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.action.onClicked.addListener((tab) => {
   if (!tab?.id) return;
 
+  // 로컬 뷰어 페이지는 확장 프로그램 자체 페이지라 아래 방식(스크립트 주입)이 안 통한다.
+  // 그 페이지에 직접 알려서 페이지가 스스로 뷰어를 열고 닫게 한다.
+  if (String(tab.url || "").startsWith(chrome.runtime.getURL("local-viewer/local-viewer.html"))) {
+    chrome.runtime
+      .sendMessage({ type: "DCMV_LOCAL_VIEWER_TOGGLE", tabId: tab.id })
+      .catch(() => {});
+    return;
+  }
+
   // 비동기 작업(await)이 시작되기 전에 즉시 executeScript를 쏘아서
   // 웹페이지 컨텍스트에 5초짜리 "사용자 활성화(User Activation)"를 충전합니다.
   chrome.scripting.executeScript({

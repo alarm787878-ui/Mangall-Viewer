@@ -686,8 +686,53 @@
   overflow: hidden;
 }
 
-.dcmv-settings-long-image-split-wrap[hidden] {
+.dcmv-settings-long-image-split-wrap[hidden],
+.dcmv-settings-auto-long-image-split[hidden] {
   display: none;
+}
+
+/* on/off 스위치 자리에 들어가는 "1/N" 칸. 아래 숫자만 입력 칸이다. */
+.dcmv-settings-long-image-split-fraction {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  min-width: 36px;
+  height: 18px;
+  margin-right: 12px;
+  padding: 0 5px;
+  border-radius: 999px;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.10);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: text;
+}
+
+.dcmv-settings-item.dcmv-toggle-active .dcmv-settings-long-image-split-fraction {
+  background: rgba(255, 255, 255, 0.34);
+  color: #fff;
+}
+
+.dcmv-settings-long-image-split-count-input {
+  width: 2ch;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: center;
+}
+
+.dcmv-settings-long-image-split-count-input:focus {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .dcmv-settings-item-main,
